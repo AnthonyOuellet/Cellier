@@ -244,7 +244,7 @@
       </div>
     </div>
     <form class="manual" id="manualForm">
-      <input id="manualCode" inputmode="numeric" placeholder="Ou entrer le code-barres / code SAQ">
+      <input id="manualCode" autocapitalize="off" placeholder="Code-barres, code SAQ ou L + SKU LCBO">
       <button class="btn" type="submit">OK</button>
     </form>
   </section>
@@ -317,7 +317,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.8';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -328,6 +328,8 @@ const S = {
   url: store.get('url', ''),
   token: store.get('token', ''),
   wines: store.get('wines', []),
+  headers: store.get('headers', []),
+  readonly: store.get('readonly', ['Statut', "Jusqu'à", 'Score', 'Column 20']),
   archive: store.get('archive', []),
   tab: 'scan',
   current: null,
@@ -375,6 +377,8 @@ async function loadData(quiet) {
   try {
     const [c, a] = await Promise.all([api('cellar'), api('archive')]);
     S.wines = c.wines || [];
+    if (c.headers) { S.headers = c.headers; store.set('headers', S.headers); }
+    if (c.readonly) { S.readonly = c.readonly; store.set('readonly', S.readonly); }
     S.archive = a.rows || [];
     store.set('wines', S.wines);
     store.set('archive', S.archive);
@@ -615,9 +619,10 @@ $('#manualForm').addEventListener('submit', e => {
   if (!v) return;
   $('#manualCode').value = '';
   stopScan();
-  // 8 chiffres = code SAQ ; plus long = code-barres
+  // « L78006 » ou « LCBO 78006 » = SKU LCBO ; 8 chiffres = code SAQ ; plus long = code-barres
   const digits = v.replace(/\D/g, '');
-  if (digits.length === 8 && !digits.startsWith('0')) openLookup('', digits);
+  if (/^l(cbo)?\s*#?\s*\d+$/i.test(v)) openLookup('', '', digits);
+  else if (digits.length === 8 && !digits.startsWith('0')) openLookup('', digits);
   else openLookup(v);
 });
 
@@ -657,12 +662,13 @@ function loadingSheet(msg) {
 /* =====================================================================
    Recherche d'une bouteille → carte d'action
    ===================================================================== */
-async function openLookup(barcode, saq) {
-  loadingSheet('Recherche de la bouteille…');
+async function openLookup(barcode, saq, lcbo) {
+  loadingSheet(lcbo ? 'Recherche du SKU ' + lcbo + ' à la LCBO…' : 'Recherche de la bouteille…');
   try {
     const params = {};
     if (barcode) params.barcode = barcode;
     if (saq) params.saq = saq;
+    if (lcbo) params.lcbo = lcbo;
     const r = await api('lookup', params);
     S.current = {
       barcode: r.barcode || '',
@@ -774,7 +780,8 @@ function renderCard() {
   if (c.matches.length) {
     html += c.matches
       .slice().sort((a, b) => num(a['Millésime']) - num(b['Millésime']))
-      .map(m => '<div class="choice">' + matchLine(m) + '</div>').join('');
+      .map(m => '<div class="choice">' + matchLine(m) +
+        '<button class="chip" onclick="startEdit(' + m.row + ')">✎ Modifier</button></div>').join('');
   } else if (c.suggestions.length) {
     html += '<p class="meta">Cette bouteille n’est pas encore liée à ta feuille. ' +
       'Ces vins de ton cellier ont un nom qui ressemble. Est-ce l’un d’eux ?</p>' +
@@ -789,7 +796,10 @@ function renderCard() {
       '<div class="row">' +
       '<button class="btn" onclick="closeSheet()">⌁ Rescanner</button>' +
       '<a class="btn" target="_blank" rel="noopener" href="https://www.lcbo.com/en/catalogsearch/result/?q=' +
-      encodeURIComponent(c.barcode.replace(/^0+(?=\d{12,13}$)/, '')) + '">Chercher à la LCBO</a></div>';
+      encodeURIComponent(c.barcode.replace(/^0+(?=\d{12,13}$)/, '')) + '">Chercher à la LCBO</a></div>' +
+      '<label class="field" for="lcboSku">SKU LCBO trouvé sur lcbo.com</label>' +
+      '<div class="row"><input id="lcboSku" inputmode="numeric" placeholder="ex. 78006">' +
+      '<button class="btn gold" onclick="loadLcboSku()">Charger la fiche</button></div>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
   }
@@ -883,17 +893,147 @@ async function doRemove(m) {
   }
 }
 
+/* ---------------------------- Formulaires (colonnes de la feuille) ---------------------------- */
+const NUM_FIELDS = ['Qté', 'Millésime', "Année d'achat", 'Prix', 'À partir de', 'Garde', 'Note /10'];
+// Champs propres à chaque millésime : jamais recopiés d'un autre millésime
+const PER_VINTAGE = ['Qté', 'Millésime', "Année d'achat", 'À partir de', 'Note /10', 'Code-barres'];
+
+/** Colonnes modifiables : toutes sauf les formules (Statut, Jusqu'à, Score) et la colonne d'inventaire. */
+function editableHeaders(withQty) {
+  const hs = S.headers.length ? S.headers : Object.keys(S.wines[0] || {}).filter(k => k !== 'row');
+  return hs.filter(h => S.readonly.indexOf(h) < 0 && (withQty || h !== 'Qté'));
+}
+
+const cellStr = v => (v === null || v === undefined) ? '' : String(v);
+
+/** Formulaire : un champ par colonne, avec suggestions tirées des valeurs déjà dans la feuille. */
+function formHtml(fields, headers) {
+  return headers.map((h, i) => {
+    const isNum = NUM_FIELDS.indexOf(h) >= 0;
+    let list = '';
+    if (!isNum && h !== 'Nom' && h !== 'Code SAQ' && h !== 'Code-barres') {
+      const vals = [...new Set(S.wines.map(w => cellStr(w[h]).trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, 'fr')).slice(0, 80);
+      if (vals.length) list = '<datalist id="dl' + i + '">' + vals.map(v => '<option value="' + esc(v) + '">').join('') + '</datalist>';
+    }
+    return '<label class="field">' + esc(h) + '</label>' +
+      '<input data-h="' + esc(h) + '"' + (isNum ? ' inputmode="decimal"' : '') +
+      (list ? ' list="dl' + i + '"' : '') + ' value="' + esc(cellStr(fields[h])) + '">' + list;
+  }).join('');
+}
+
+function readForm() {
+  const o = {};
+  document.querySelectorAll('#sheet [data-h]').forEach(el => { o[el.dataset.h] = el.value.trim(); });
+  return o;
+}
+
+/** Les autres lignes du même vin (même nom, normalisé) : sources pour compléter un formulaire. */
+function siblingsOf(name, exceptRow) {
+  const n = normName(name);
+  return n ? S.wines.filter(w => w.row !== exceptRow && normName(w['Nom']) === n)
+    .sort((a, b) => num(b['Millésime']) - num(a['Millésime'])) : [];
+}
+
+/** Remplit les champs VIDES du formulaire avec ceux d'une autre ligne (sauf les champs propres au millésime). */
+function fillFrom(row) {
+  const w = S.wines.find(x => x.row === row);
+  if (!w) return;
+  let n = 0;
+  document.querySelectorAll('#sheet [data-h]').forEach(el => {
+    const h = el.dataset.h;
+    if (PER_VINTAGE.indexOf(h) >= 0 || el.value.trim() || !cellStr(w[h]).trim()) return;
+    el.value = cellStr(w[h]); n++;
+  });
+  toast(n ? n + ' champ' + (n > 1 ? 's complétés' : ' complété') : 'Aucun champ vide à compléter');
+}
+
+function siblingButtons(sibs) {
+  if (!sibs.length) return '';
+  return '<h3>Compléter les champs vides avec</h3>' + sibs.slice(0, 4).map(w =>
+    '<button class="choice" onclick="fillFrom(' + w.row + ')"><div class="grow"><b>' + esc(w['Nom']) + '</b> ' +
+    esc(w['Millésime'] || '') + '<small>' + esc([w['Producteur'], w['Pays'], w['Cépage']].filter(Boolean).join(' · ')) +
+    '</small></div><span class="chip">Copier</span></button>').join('');
+}
+
+/* ---------------------------- Modifier une ligne ---------------------------- */
+function startEdit(row) {
+  const w = S.wines.find(x => x.row === row) || (S.current && S.current.matches.find(x => x.row === row));
+  if (!w) return toast('Ligne introuvable : actualise le cellier (⟳)', true);
+  S.current.edit = { row: w.row, name: w['Nom'], vintage: w['Millésime'], original: w };
+  const hs = editableHeaders(true);
+  openSheet('<h2>Modifier</h2><div class="meta">' + esc(w['Nom']) + ' ' + esc(w['Millésime'] || '') +
+    ' · ligne ' + w.row + ' de ta feuille</div>' +
+    siblingButtons(siblingsOf(w['Nom'], w.row)) +
+    '<h3>Colonnes</h3>' + formHtml(w, hs) +
+    '<p class="meta" style="margin-top:12px">Statut, Jusqu’à et Score se recalculent avec tes formules.</p>' +
+    '<div class="row" style="margin-top:12px"><button class="btn" onclick="renderCard()">Annuler</button>' +
+    '<button class="btn primary" id="btnSaveEdit">Enregistrer</button></div>');
+  $('#btnSaveEdit').addEventListener('click', saveEdit);
+}
+
+async function saveEdit() {
+  const e = S.current.edit;
+  const form = readForm();
+  const changed = {};
+  Object.keys(form).forEach(h => { if (form[h] !== cellStr(e.original[h]).trim()) changed[h] = form[h]; });
+  if (!Object.keys(changed).length) { toast('Aucun changement'); return renderCard(); }
+  if (changed['Nom'] === '') return toast('Le nom du vin est obligatoire', true);
+  loadingSheet('Enregistrement dans la feuille…');
+  try {
+    await api('update', { row: e.row, name: e.name, vintage: e.vintage, fields: changed }, true);
+    toast('Modifications enregistrées');
+    closeSheet();
+    loadData(true);
+  } catch (err) {
+    toast(err.message, true);
+    renderCard();
+  }
+}
+
 /* ---------------------------- Ajouter ---------------------------- */
 function startAdd() {
   const c = S.current;
-  c.add = { target: c.matches.length ? c.matches[0].row : 'new', qty: 1 };
+  c.add = { target: c.matches.length ? c.matches[0].row : 'new', qty: 1, fields: null };
   renderAdd();
+}
+
+/** Valeurs de départ d'un nouveau vin : autre millésime du même vin, puis fiche SAQ / LCBO pour le reste. */
+function newWineDefaults(c) {
+  const p = c.product || {};
+  const sib = c.matches.slice().sort((a, b) => num(b['Millésime']) - num(a['Millésime']))[0] ||
+    siblingsOf(p.name || (c.ref || {})['Nom'])[0] || null;
+  const f = {};
+  if (sib) Object.keys(sib).forEach(h => { if (h !== 'row' && PER_VINTAGE.indexOf(h) < 0) f[h] = cellStr(sib[h]); });
+  const put = (h, v, override) => { if (v !== null && v !== undefined && v !== '' && (override || !cellStr(f[h]).trim())) f[h] = v; };
+  put('Nom', p.name || (c.ref || {})['Nom']);
+  put('Producteur', p.producer);
+  put('Pays', p.country);
+  put('Région / Appellation', p.region);
+  put('Appellation', p.appellation);
+  put('Type', p.type);
+  put('Cépage', p.grape);
+  put('Pastille', p.pastille);
+  put('Garde', p.gardeYears);
+  put('Prix', p.price, true);                                   // prix actuel de la fiche
+  put('Code SAQ', c.saq || (p.source === 'SAQ' ? p.sku : ''));
+  put("Lieux d'achat", { SAQ: 'SAQ', LCBO: 'LCBO' }[p.source] || (c.saq ? 'SAQ' : 'Hors SAQ'));
+  f['Millésime'] = cellStr(p.vintage || '');
+  f["Année d'achat"] = String(new Date().getFullYear());
+  f['Code-barres'] = c.barcode || p.cup || '';
+  f['À partir de'] = '';
+  // Pour calculer « À partir de » une fois le millésime connu
+  c.add.drinkNow = !!p.drinkNow;
+  c.add.sibOffset = sib && num(sib['À partir de']) && num(sib['Millésime'])
+    ? num(sib['À partir de']) - num(sib['Millésime']) : null;
+  return f;
 }
 
 function renderAdd() {
   const c = S.current;
   const a = c.add;
   const p = c.product;
+  if (isSheetOpen() && document.querySelector('#sheet [data-h]')) a.fields = readForm();   // garder la saisie
   const vintages = c.matches.slice().sort((x, y) => num(y['Millésime']) - num(x['Millésime']));
   let html = cardHeader(c) + '<h3>Ajouter au cellier</h3>';
 
@@ -902,25 +1042,24 @@ function renderAdd() {
       '<button class="choice' + (a.target === m.row ? ' selected' : '') + '" onclick="pickAdd(' + m.row + ')">' +
       matchLine(m) + '</button>').join('');
   }
+  const srcLabel = p ? ({ LCBO: 'la fiche LCBO', OFF: 'Open Food Facts' }[p.source] || 'la fiche SAQ') : '';
   html += '<button class="choice' + (a.target === 'new' ? ' selected' : '') + '" onclick="pickAdd(\'new\')">' +
     '<div class="grow"><b>' + (vintages.length ? 'Un autre millésime' : 'Nouveau vin') + '</b>' +
-    '<small>' + (p ? 'Fiche remplie avec les infos ' + ({ LCBO: 'LCBO', OFF: 'Open Food Facts' }[p.source] || 'SAQ') : 'Entrée manuelle') +
-    '</small></div></button>';
-
-  if (a.target === 'new') {
-    if (!p && !c.matches.length) {
-      html += '<label class="field" for="addName">Nom du vin</label><input id="addName" placeholder="Nom">' +
-        '<label class="field" for="addPlace">Lieu d’achat</label><input id="addPlace" value="' + (c.saq ? 'SAQ' : 'Hors SAQ') + '">';
-    }
-    const guess = (p && p.vintage) || '';
-    html += '<label class="field" for="addVintage">Millésime sur la bouteille</label>' +
-      '<input id="addVintage" inputmode="numeric" maxlength="4" placeholder="ex. 2021" value="' + esc(guess) + '">';
-  }
+    '<small>' + (vintages.length ? 'Pré-rempli avec ton autre millésime' + (p ? ' et ' + srcLabel : '')
+      : p ? 'Pré-rempli avec ' + srcLabel : 'À remplir') + '</small></div></button>';
 
   html += '<label class="field">Nombre de bouteilles</label>' +
     '<div class="stepper"><button class="btn" onclick="stepAdd(-1)">−</button><output id="addQty">' + a.qty +
-    '</output><button class="btn" onclick="stepAdd(1)">＋</button></div>' +
-    '<div class="row" style="margin-top:16px"><button class="btn" onclick="renderCard()">Annuler</button>' +
+    '</output><button class="btn" onclick="stepAdd(1)">＋</button></div>';
+
+  if (a.target === 'new') {
+    if (!a.fields) a.fields = newWineDefaults(c);
+    html += '<h3>Fiche du vin</h3>' +
+      '<p class="meta">Vérifie surtout le <b>millésime</b> sur la bouteille. Tout reste modifiable plus tard (✎).</p>' +
+      formHtml(a.fields, editableHeaders(false));
+  }
+
+  html += '<div class="row" style="margin-top:16px"><button class="btn" onclick="renderCard()">Annuler</button>' +
     '<button class="btn gold" id="btnDoAdd">Ajouter</button></div>';
   openSheet(html);
   $('#btnDoAdd').addEventListener('click', doAdd);
@@ -937,24 +1076,25 @@ async function doAdd() {
   const c = S.current;
   const a = c.add;
   const params = { qty: a.qty, barcode: c.barcode, saq: c.saq };
-  if (c.product && c.product.source && c.product.source !== 'SAQ') {
-    params.source = c.product.source;
-    params.ext = c.product.sku;
-  }
 
   if (a.target === 'new') {
-    const v = ($('#addVintage') || {}).value || '';
-    if (v && !/^(19|20)\d{2}$/.test(v.trim())) return toast('Millésime invalide (4 chiffres)', true);
-    const dup = c.matches.find(m => String(m['Millésime']) === v.trim());
-    if (dup) { a.target = dup.row; renderAdd(); return toast('Ce millésime est déjà dans ta feuille : sélectionné.'); }
-    params.vintage = v.trim();
-    if (!c.product && !c.matches.length) {
-      params.name = (($('#addName') || {}).value || '').trim();
-      params.place = (($('#addPlace') || {}).value || '').trim();
-      if (!params.name) return toast('Indique le nom du vin', true);
-    } else if (!c.product && c.matches.length) {
-      params.name = c.matches[0]['Nom'];
+    const f = readForm();
+    const v = f['Millésime'] || '';
+    if (v && !/^(19|20)\d{2}$/.test(v)) return toast('Millésime invalide (4 chiffres)', true);
+    if (!f['Nom']) return toast('Indique le nom du vin', true);
+    const dup = S.wines.find(w => normName(w['Nom']) === normName(f['Nom']) && cellStr(w['Millésime']).trim() === v);
+    if (dup) {
+      if (!c.matches.find(m => m.row === dup.row)) c.matches.push(dup);
+      a.target = dup.row; renderAdd();
+      return toast('Ce vin et ce millésime sont déjà dans ta feuille : sélectionné.');
     }
+    if (!f['À partir de'] && v) {
+      if (a.drinkNow) f['À partir de'] = v;
+      else if (a.sibOffset !== null) f['À partir de'] = String(Number(v) + a.sibOffset);
+    }
+    params.fields = f;
+    if (!params.barcode && f['Code-barres']) params.barcode = f['Code-barres'];
+    if (!params.saq && f['Code SAQ']) params.saq = f['Code SAQ'];
   } else {
     const m = c.matches.find(x => x.row === a.target);
     Object.assign(params, { row: m.row, name: m['Nom'], vintage: m['Millésime'] });
@@ -970,6 +1110,13 @@ async function doAdd() {
     toast(e.message, true);
     renderAdd();
   }
+}
+
+/** SKU trouvé sur lcbo.com → fiche LCBO, en gardant le code-barres scanné. */
+function loadLcboSku() {
+  const sku = (($('#lcboSku') || {}).value || '').replace(/\D/g, '');
+  if (!sku) return toast('Entre le SKU (les chiffres du # sur lcbo.com)', true);
+  openLookup((S.current && S.current.barcode) || '', '', sku);
 }
 
 /* =====================================================================
