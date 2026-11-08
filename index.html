@@ -85,6 +85,12 @@
     position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
     align-items: center; justify-content: center; background: #0d0609; color: var(--muted); text-align: center; padding: 24px;
   }
+  .cam-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; }
+  .tool {
+    background: rgba(0,0,0,.55); color: #fff; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 999px; padding: 7px 11px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .tool.on { background: var(--accent-2); color: #2a1408; border-color: var(--accent-2); }
   .manual { display: flex; gap: 8px; margin-top: 12px; }
   .manual input { flex: 1; }
 
@@ -211,7 +217,12 @@
       <video id="video" playsinline muted></video>
       <div class="frame"></div>
       <div class="laser"></div>
-      <div class="hint">Vise le code-barres de la bouteille</div>
+      <div class="hint" id="scanHint">Vise le code-barres de la bouteille</div>
+      <div class="cam-tools">
+        <button class="tool" id="btnCam" title="Changer de caméra">⟲ Caméra</button>
+        <button class="tool" id="btnZoom" title="Zoom">2×</button>
+        <button class="tool" id="btnTorch" title="Lampe">🔦</button>
+      </div>
       <div class="start" id="scanStart">
         <div style="font-size:42px">📷</div>
         <div id="scanMsg">Touchez pour lancer la caméra</div>
@@ -360,7 +371,79 @@ document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('cl
 /* =====================================================================
    Scanner
    ===================================================================== */
-const scan = { stream: null, detector: null, running: false, last: '' };
+// Un code n'est accepté que s'il a un chiffre de contrôle valide
+// ET qu'il a été lu CONFIRM_READS fois à l'identique.
+const CONFIRM_READS = 3;
+const ZOOM_STEPS = [1, 1.5, 2, 3];
+const scan = {
+  stream: null, track: null, detector: null, running: false, reads: {},
+  camId: store.get('camId', ''), zoom: store.get('zoom', 2), torch: false
+};
+
+/** Chiffre de contrôle GTIN (EAN-8, UPC-A, EAN-13, GTIN-14). */
+function validGtin(code) {
+  const d = String(code || '');
+  if (!/^\d+$/.test(d) || ![8, 12, 13, 14].includes(d.length)) return false;
+  const digits = d.split('').map(Number);
+  const check = digits.pop();
+  const sum = digits.reverse().reduce((s, n, i) => s + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+/** Numéro de capteur dans le libellé Android ("camera2 0, facing back" → 0). */
+const camNum = label => {
+  const m = String(label).match(/camera\d*\s+(\d+)/i) || String(label).match(/(\d+)\s*,/) || String(label).match(/(\d+)/);
+  return m ? Number(m[1]) : 99;
+};
+
+async function backCameras() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const back = devs.filter(d => /back|arri[eè]re|rear|environment/i.test(d.label));
+  return (back.length ? back : devs).sort((a, b) => camNum(a.label) - camNum(b.label));
+}
+
+function stopTracks() {
+  if (scan.stream) scan.stream.getTracks().forEach(t => t.stop());
+  scan.stream = null;
+  scan.track = null;
+}
+
+async function openCamera(deviceId) {
+  const video = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  if (deviceId) video.deviceId = { exact: deviceId };
+  else video.facingMode = { ideal: 'environment' };
+  scan.stream = await navigator.mediaDevices.getUserMedia({ video });
+  scan.track = scan.stream.getVideoTracks()[0];
+  const v = $('#video');
+  v.srcObject = scan.stream;
+  await v.play();
+  await tuneCamera();
+}
+
+/** Mise au point continue, zoom et lampe quand le capteur les offre. */
+async function tuneCamera() {
+  const t = scan.track;
+  const caps = (t && t.getCapabilities) ? t.getCapabilities() : {};
+  const adv = {};
+  if (caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+  let z = 1;
+  if (caps.zoom) {
+    z = Math.min(caps.zoom.max, Math.max(caps.zoom.min, scan.zoom));
+    adv.zoom = z;
+  }
+  if (caps.torch) adv.torch = scan.torch;
+  try { if (Object.keys(adv).length) await t.applyConstraints({ advanced: [adv] }); } catch (e) { /* ignoré */ }
+  $('#btnZoom').style.display = caps.zoom ? '' : 'none';
+  $('#btnZoom').textContent = (Math.round(z * 10) / 10) + '×';
+  $('#btnTorch').style.display = caps.torch ? '' : 'none';
+  $('#btnTorch').classList.toggle('on', !!scan.torch);
+}
+
+function cameraError() {
+  scan.running = false;
+  $('#scanStart').style.display = 'flex';
+  $('#scanMsg').textContent = "Caméra non disponible. Autorise l'accès à la caméra, puis réessaie.";
+}
 
 async function startScan() {
   if (scan.running || isSheetOpen()) return;
@@ -371,49 +454,102 @@ async function startScan() {
   }
   try {
     if (!scan.detector) {
-      const wanted = ['ean_13', 'upc_a', 'ean_8', 'upc_e'];
+      const wanted = ['ean_13', 'upc_a', 'ean_8'];
       const supported = await BarcodeDetector.getSupportedFormats();
       scan.detector = new BarcodeDetector({ formats: wanted.filter(f => supported.includes(f)) });
     }
-    scan.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }
-    });
-    const v = $('#video');
-    v.srcObject = scan.stream;
-    await v.play();
-    scan.running = true;
-    $('#scanStart').style.display = 'none';
-    detectLoop();
+    try {
+      await openCamera(scan.camId);
+    } catch (e) {
+      if (!scan.camId) throw e;
+      scan.camId = ''; store.set('camId', '');      // caméra mémorisée disparue
+      await openCamera('');
+    }
+    // Première fois : choisir le capteur principal (le plus petit numéro à l'arrière)
+    if (!scan.camId) {
+      const cams = await backCameras();
+      const main = cams[0];
+      const current = scan.track.getSettings().deviceId;
+      if (main && main.deviceId && main.deviceId !== current) {
+        stopTracks();
+        try { await openCamera(main.deviceId); } catch (e) { await openCamera(''); }
+      }
+      scan.camId = (scan.track.getSettings().deviceId) || '';
+      store.set('camId', scan.camId);
+    }
   } catch (e) {
-    $('#scanStart').style.display = 'flex';
-    $('#scanMsg').textContent = "Caméra non disponible. Autorise l'accès à la caméra, puis réessaie.";
+    return cameraError();
   }
+  scan.reads = {};
+  scan.running = true;
+  $('#scanStart').style.display = 'none';
+  setScanHint();
+  detectLoop();
 }
 
 function stopScan() {
   scan.running = false;
-  if (scan.stream) scan.stream.getTracks().forEach(t => t.stop());
-  scan.stream = null;
+  stopTracks();
   $('#scanStart').style.display = 'flex';
   $('#scanMsg').textContent = 'Touchez pour lancer la caméra';
+}
+
+function setScanHint() {
+  const best = Math.max(0, ...Object.values(scan.reads));
+  $('#scanHint').textContent = best
+    ? 'Lecture… ' + '●'.repeat(best) + '○'.repeat(Math.max(0, CONFIRM_READS - best))
+    : 'Vise le code-barres de la bouteille';
 }
 
 async function detectLoop() {
   if (!scan.running) return;
   try {
     const codes = await scan.detector.detect($('#video'));
-    if (codes.length) {
-      const code = codes[0].rawValue;
-      stopScan();
-      if (navigator.vibrate) navigator.vibrate(60);
-      openLookup(code);
-      return;
+    for (const c of codes) {
+      const code = String(c.rawValue || '').trim();
+      if (!validGtin(code)) continue;               // lecture partielle ou erronée
+      scan.reads[code] = (scan.reads[code] || 0) + 1;
+      if (scan.reads[code] >= CONFIRM_READS) {
+        stopScan();
+        if (navigator.vibrate) navigator.vibrate(60);
+        openLookup(code);
+        return;
+      }
     }
+    if (codes.length) setScanHint();
   } catch (e) { /* image pas prête */ }
-  setTimeout(detectLoop, 180);
+  setTimeout(detectLoop, 90);
+}
+
+async function switchCamera() {
+  try {
+    const cams = await backCameras();
+    if (cams.length < 2) return toast('Une seule caméra disponible');
+    const i = cams.findIndex(c => c.deviceId === scan.camId);
+    const next = cams[(i + 1) % cams.length];
+    stopTracks();
+    await openCamera(next.deviceId);
+    scan.camId = next.deviceId;
+    store.set('camId', scan.camId);
+    scan.reads = {};
+    toast('Caméra ' + ((i + 1) % cams.length + 1) + '/' + cams.length + (next.label ? ' — ' + next.label : ''));
+  } catch (e) {
+    toast('Impossible de changer de caméra', true);
+  }
 }
 
 $('#btnStartScan').addEventListener('click', startScan);
+$('#btnCam').addEventListener('click', switchCamera);
+$('#btnZoom').addEventListener('click', async () => {
+  const i = ZOOM_STEPS.findIndex(z => z >= scan.zoom - 0.01);
+  scan.zoom = ZOOM_STEPS[(i + 1) % ZOOM_STEPS.length];
+  store.set('zoom', scan.zoom);
+  await tuneCamera();
+});
+$('#btnTorch').addEventListener('click', async () => {
+  scan.torch = !scan.torch;
+  await tuneCamera();
+});
 $('#manualForm').addEventListener('submit', e => {
   e.preventDefault();
   const v = $('#manualCode').value.trim();
@@ -522,6 +658,10 @@ function renderCard() {
       c.suggestions.map((s, i) =>
         '<button class="choice" onclick="linkSuggestion(' + i + ')">' + matchLine(s) +
         '<span class="chip">C’est lui</span></button>').join('');
+  } else if (!c.product && c.barcode) {
+    html += '<p class="meta">Code lu : <b>' + esc(c.barcode) + '</b> — introuvable à la SAQ et dans ta feuille. ' +
+      'Si ce n’est pas le code de la bouteille, rescanne.</p>' +
+      '<button class="btn block" onclick="closeSheet()">⌁ Rescanner</button>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
   }
