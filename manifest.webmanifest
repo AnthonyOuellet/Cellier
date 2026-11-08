@@ -10,13 +10,69 @@
   "background_color": "#160b11",
   "theme_color": "#2a0f1c",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ],
   "shortcuts": [
-    { "name": "Scanner une bouteille", "short_name": "Scanner", "url": "./?tab=scan", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
-    { "name": "Mon cellier", "short_name": "Cellier", "url": "./?tab=cellar", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
-    { "name": "Statistiques", "short_name": "Stats", "url": "./?tab=stats", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+    {
+      "name": "Scanner une bouteille",
+      "short_name": "Scanner",
+      "url": "./?tab=scan",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Mon cellier",
+      "short_name": "Cellier",
+      "url": "./?tab=cellar",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Historique des bouteilles bues",
+      "short_name": "Historique",
+      "url": "./?tab=history",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Statistiques",
+      "short_name": "Stats",
+      "url": "./?tab=stats",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
   ]
 }

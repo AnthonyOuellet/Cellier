@@ -52,7 +52,7 @@
   /* ---------- Bottom tabs ---------- */
   nav.tabs {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-    display: grid; grid-template-columns: repeat(3, 1fr);
+    display: grid; grid-template-columns: repeat(4, 1fr);
     background: rgba(22, 11, 17, .96); border-top: 1px solid var(--line);
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -182,6 +182,16 @@
     display: flex; align-items: center; justify-content: center; font-weight: 700;
   }
   .wine.empty { opacity: .5; }
+  .month { margin: 16px 2px 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .month:first-child { margin-top: 4px; }
+  .wine .day {
+    flex: none; width: 44px; text-align: center; line-height: 1.1; color: var(--muted); font-size: 11px;
+  }
+  .wine .day b { display: block; font-size: 20px; color: var(--text); }
+  .tally { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .tally div { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .tally b { font-size: 22px; margin-right: 6px; }
+  .tally span { color: var(--muted); font-size: 13px; }
   .status { font-size: 12px; }
 
   /* ---------- Stats ---------- */
@@ -266,6 +276,19 @@
     <div id="list"></div>
   </section>
 
+  <!-- ================= Historique ================= -->
+  <section class="view" id="view-history">
+    <div class="toolbar">
+      <input id="hq" type="search" placeholder="Rechercher un vin, une personne…">
+      <div class="filters">
+        <select id="hYear"></select>
+        <select id="hType"></select>
+      </div>
+      <div class="count"><span id="hCount"></span></div>
+    </div>
+    <div id="hList"></div>
+  </section>
+
   <!-- ================= Stats ================= -->
   <section class="view" id="view-stats">
     <div class="kpis" id="kpis"></div>
@@ -281,6 +304,7 @@
 <nav class="tabs">
   <button data-tab="scan"><b>⌁</b>Scanner</button>
   <button data-tab="cellar"><b>▤</b>Cellier</button>
+  <button data-tab="history"><b>↺</b>Historique</button>
   <button data-tab="stats"><b>◔</b>Stats</button>
 </nav>
 
@@ -293,7 +317,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '1.4';
+const APP_VERSION = '1.5';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -357,6 +381,7 @@ async function loadData(quiet) {
     buildFilters();
     renderList();
     if (S.tab === 'stats') renderStats();
+    if (S.tab === 'history') renderHistory();
     if (!quiet) toast('Cellier à jour');
   } catch (e) {
     toast(e.message, true);
@@ -398,6 +423,7 @@ function applyTab(tab) {
   if (tab === 'scan') startScan(); else stopScan();
   if (tab === 'cellar') renderList();
   if (tab === 'stats') renderStats();
+  if (tab === 'history') renderHistory();
 }
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
@@ -661,9 +687,50 @@ function openFromList(row) {
   renderCard();
 }
 
+/* ---------------------------- Historique (onglet Archive) ---------------------------- */
+const normName = s => String(s == null ? '' : s).toLowerCase()
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9]+/g, ' ').trim();
+
+const toDate = v => { const d = v ? new Date(v) : null; return d && !isNaN(d) ? d : null; };
+
+function fmtDate(v, withWeekday) {
+  const d = toDate(v);
+  if (!d) return String(v || 'Date inconnue');
+  return d.toLocaleDateString('fr-CA', withWeekday
+    ? { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }
+    : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** Les lignes de l'Archive qui correspondent au vin de la carte (même nom, tous millésimes). */
+function historyFor(c) {
+  const names = new Set();
+  c.matches.forEach(m => names.add(normName(m['Nom'])));
+  if (c.product && c.product.name) names.add(normName(c.product.name));
+  if (c.ref && c.ref['Nom']) names.add(normName(c.ref['Nom']));
+  names.delete('');
+  return S.archive
+    .filter(r => names.has(normName(r['Nom'])))
+    .sort((a, b) => ((toDate(b['Bu le']) || 0) - (toDate(a['Bu le']) || 0)));
+}
+
+/** Une dégustation : date, millésime, avec qui, note. withName = afficher le nom du vin. */
+function histLine(r, withName) {
+  const note = r['Note /10'] !== '' && r['Note /10'] != null ? ' · ' + esc(r['Note /10']) + '/10' : '';
+  const title = withName
+    ? '<b>' + esc(r['Nom']) + '</b> ' + esc(r['Millésime'] || '')
+    : '<b>' + esc(fmtDate(r['Bu le'], true)) + '</b>';
+  const sub = withName
+    ? fmtDate(r['Bu le'], true)
+    : (r['Millésime'] ? 'Millésime ' + r['Millésime'] : 'Sans millésime');
+  return '<div class="grow">' + title +
+    '<small>' + esc(sub) + note + '</small>' +
+    (r['Avec'] ? '<small>avec ' + esc(r['Avec']) + '</small>' : '') + '</div>';
+}
+
 function cardHeader(c) {
   const p = c.product;
-  const m = c.matches[0] || {};
+  const m = c.matches[0] || c.ref || {};
   const name = (p && p.name) || m['Nom'] || 'Bouteille inconnue';
   const bits = p
     ? [p.type, p.country, p.region].filter(Boolean)
@@ -692,7 +759,13 @@ function renderCard() {
   const c = S.current;
   if (!c) return;
   const inStock = c.matches.filter(m => qty(m) > 0);
+  const hist = historyFor(c);
+  const bottles = c.matches.reduce((s, m) => s + Math.max(0, qty(m)), 0);
   let html = cardHeader(c);
+
+  html += '<div class="tally">' +
+    '<div><b>' + bottles + '</b><span>au cellier</span></div>' +
+    '<div><b>' + hist.length + '</b><span>' + (hist.length > 1 ? 'bues' : 'bue') + '</span></div></div>';
 
   html += '<h3>Dans ton cellier</h3>';
   if (c.matches.length) {
@@ -712,6 +785,15 @@ function renderCard() {
       '<button class="btn block" onclick="closeSheet()">⌁ Rescanner</button>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
+  }
+
+  if (hist.length) {
+    const shown = c.showAllHist ? hist : hist.slice(0, 5);
+    html += '<h3>Historique</h3>' + shown.map(r => '<div class="choice">' + histLine(r, false) + '</div>').join('');
+    if (hist.length > shown.length) {
+      html += '<button class="btn block" onclick="S.current.showAllHist = true; renderCard()">Voir les ' +
+        hist.length + ' dégustations</button>';
+    }
   }
 
   const infoUrl = c.saq
@@ -960,6 +1042,77 @@ function renderList() {
 $('#showEmpty').addEventListener('change', () => { buildFilters(); renderList(); });
 
 /* =====================================================================
+   Historique : tout ce qui a été bu (onglet Archive)
+   ===================================================================== */
+function buildHistoryFilters() {
+  const yEl = $('#hYear'), tEl = $('#hType');
+  const curY = yEl.value, curT = tEl.value;
+  const years = [...new Set(S.archive.map(r => toDate(r['Bu le'])).filter(Boolean).map(d => d.getFullYear()))]
+    .sort((a, b) => b - a);
+  yEl.innerHTML = '<option value="">Toutes les années</option>' +
+    years.map(y => '<option' + (String(y) === curY ? ' selected' : '') + '>' + y + '</option>').join('');
+  const types = [...new Set(S.archive.map(r => r['Type']).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+  tEl.innerHTML = '<option value="">Tous les types</option>' +
+    types.map(t => '<option' + (t === curT ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
+}
+
+function renderHistory() {
+  buildHistoryFilters();
+  const q = $('#hq').value.trim().toLowerCase();
+  const y = $('#hYear').value, t = $('#hType').value;
+  const rows = S.archive
+    .filter(r => {
+      const d = toDate(r['Bu le']);
+      if (y && (!d || String(d.getFullYear()) !== y)) return false;
+      if (t && r['Type'] !== t) return false;
+      if (q) {
+        const hay = [r['Nom'], r['Producteur'], r['Avec'], r['Pays'], r['Cépage'], r['Millésime']].join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => ((toDate(b['Bu le']) || 0) - (toDate(a['Bu le']) || 0)));
+
+  $('#hCount').textContent = rows.length + ' bouteille' + (rows.length > 1 ? 's' : '') + ' bue' + (rows.length > 1 ? 's' : '');
+  if (!S.archive.length) {
+    $('#hList').innerHTML = '<div class="empty-state">' +
+      (S.url ? 'Aucune bouteille dans l’Archive pour l’instant.' : 'Configure l’app avec ⚙ pour charger ton historique.') + '</div>';
+    return;
+  }
+  if (!rows.length) { $('#hList').innerHTML = '<div class="empty-state">Aucune dégustation ne correspond.</div>'; return; }
+
+  let html = '', lastMonth = '';
+  rows.forEach(r => {
+    const d = toDate(r['Bu le']);
+    const month = d ? d.toLocaleDateString('fr-CA', { month: 'long', year: 'numeric' }) : 'Date inconnue';
+    if (month !== lastMonth) { html += '<div class="month">' + esc(month) + '</div>'; lastMonth = month; }
+    const note = r['Note /10'] !== '' && r['Note /10'] != null ? ' · ' + esc(r['Note /10']) + '/10' : '';
+    html += '<button class="wine" onclick="openFromHistory(' + r.row + ')">' +
+      '<span class="day">' + (d ? '<b>' + d.getDate() + '</b>' + esc(d.toLocaleDateString('fr-CA', { weekday: 'short' })) : '?') + '</span>' +
+      '<span class="dot" style="background:' + (TYPE_COLORS[r['Type']] || '#777') + '"></span>' +
+      '<span class="grow"><div class="name">' + esc(r['Nom']) + ' <span class="meta">' + esc(r['Millésime'] || '') + '</span></div>' +
+      '<div class="meta">' + esc([r['Pays'], r['Pastille']].filter(Boolean).join(' · ')) + note + '</div>' +
+      (r['Avec'] ? '<div class="status">avec ' + esc(r['Avec']) + '</div>' : '') +
+      '</span></button>';
+  });
+  $('#hList').innerHTML = html;
+}
+
+/** Depuis l'historique : la carte du vin (s'il est encore au cellier, ses lignes ; sinon les infos archivées). */
+function openFromHistory(row) {
+  const r = S.archive.find(x => x.row === row);
+  if (!r) return;
+  const same = S.wines.filter(w => normName(w['Nom']) === normName(r['Nom']));
+  S.current = {
+    barcode: '', saq: String((same[0] || {})['Code SAQ'] || ''),
+    product: null, matches: same, suggestions: [], ref: r
+  };
+  renderCard();
+}
+
+['#hq', '#hYear', '#hType'].forEach(id => $(id).addEventListener('input', renderHistory));
+
+/* =====================================================================
    Statistiques
    ===================================================================== */
 function countBy(items, keyFn, weightFn) {
@@ -1110,7 +1263,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 buildFilters();
 const startTab = new URLSearchParams(location.search).get('tab');
 history.replaceState({ tab: 'scan' }, '');
-setTab(['cellar', 'stats'].includes(startTab) ? startTab : 'scan');
+setTab(['cellar', 'history', 'stats'].includes(startTab) ? startTab : 'scan');
 if (!S.url || !S.token) openSettings(); else loadData(true);
 </script>
 </body>
