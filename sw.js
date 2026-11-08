@@ -1,5 +1,5 @@
 // Service worker : l'app s'ouvre même sans réseau ; les données passent toujours par le réseau.
-const CACHE = 'cellier-1.5';
+const CACHE = 'cellier-1.7';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

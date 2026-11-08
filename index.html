@@ -317,7 +317,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.7';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -736,6 +736,9 @@ function cardHeader(c) {
     ? [p.type, p.country, p.region].filter(Boolean)
     : [m['Type'], m['Pays'], m['Région / Appellation']].filter(Boolean);
   const chips = [];
+  if (p && p.source && p.source !== 'SAQ') {
+    chips.push({ LCBO: 'Trouvé à la LCBO', OFF: 'Open Food Facts (infos limitées)' }[p.source] || p.source);
+  }
   const pastille = (p && p.pastille) || m['Pastille'];
   if (pastille) chips.push(pastille);
   const price = (p && p.price) || num(m['Prix']);
@@ -781,8 +784,12 @@ function renderCard() {
       '<button class="btn block" onclick="dismissSuggestions()">Aucun : c’est un nouveau vin</button>';
   } else if (!c.product && c.barcode) {
     html += '<p class="meta">Code lu : <b>' + esc(c.barcode) + '</b> — introuvable à la SAQ et dans ta feuille. ' +
-      'Si ce n’est pas le code de la bouteille, rescanne.</p>' +
-      '<button class="btn block" onclick="closeSheet()">⌁ Rescanner</button>';
+      'Si ce n’est pas le code de la bouteille, rescanne. Sinon, tu peux chercher à la LCBO, ' +
+      'puis l’ajouter avec ＋ (entrée manuelle).</p>' +
+      '<div class="row">' +
+      '<button class="btn" onclick="closeSheet()">⌁ Rescanner</button>' +
+      '<a class="btn" target="_blank" rel="noopener" href="https://www.lcbo.com/en/catalogsearch/result/?q=' +
+      encodeURIComponent(c.barcode.replace(/^0+(?=\d{12,13}$)/, '')) + '">Chercher à la LCBO</a></div>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
   }
@@ -798,6 +805,7 @@ function renderCard() {
 
   const infoUrl = c.saq
     ? 'https://www.saq.com/fr/' + encodeURIComponent(c.saq)
+    : (c.product && c.product.url) ? c.product.url
     : 'https://www.saq.com/fr/catalogsearch/result/?q=' + encodeURIComponent((c.product && c.product.name) || (c.matches[0] || {})['Nom'] || c.barcode);
 
   html += '<div class="actions">' +
@@ -896,7 +904,8 @@ function renderAdd() {
   }
   html += '<button class="choice' + (a.target === 'new' ? ' selected' : '') + '" onclick="pickAdd(\'new\')">' +
     '<div class="grow"><b>' + (vintages.length ? 'Un autre millésime' : 'Nouveau vin') + '</b>' +
-    '<small>' + (p ? 'Fiche remplie avec les infos SAQ' : 'Entrée manuelle') + '</small></div></button>';
+    '<small>' + (p ? 'Fiche remplie avec les infos ' + ({ LCBO: 'LCBO', OFF: 'Open Food Facts' }[p.source] || 'SAQ') : 'Entrée manuelle') +
+    '</small></div></button>';
 
   if (a.target === 'new') {
     if (!p && !c.matches.length) {
@@ -928,6 +937,10 @@ async function doAdd() {
   const c = S.current;
   const a = c.add;
   const params = { qty: a.qty, barcode: c.barcode, saq: c.saq };
+  if (c.product && c.product.source && c.product.source !== 'SAQ') {
+    params.source = c.product.source;
+    params.ext = c.product.sku;
+  }
 
   if (a.target === 'new') {
     const v = ($('#addVintage') || {}).value || '';
