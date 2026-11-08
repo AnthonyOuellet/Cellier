@@ -1,0 +1,1107 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2a0f1c">
+<title>Cellier</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #160b11;
+    --surface: #24141c;
+    --surface-2: #301b26;
+    --line: #42283a;
+    --text: #f3e9ee;
+    --muted: #b49aa8;
+    --accent: #c2375f;
+    --accent-2: #e8b04b;
+    --ok: #6cc59a;
+    --danger: #e26363;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+    background: linear-gradient(180deg, #2a0f1c, var(--bg));
+  }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; flex: 1; }
+  header h1 span { color: var(--accent-2); }
+  .icon-btn {
+    background: var(--surface); border: 1px solid var(--line); color: var(--text);
+    width: 40px; height: 40px; border-radius: 12px; font-size: 18px; cursor: pointer;
+  }
+  main { flex: 1; overflow-y: auto; padding: 0 16px 96px; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ---------- Bottom tabs ---------- */
+  nav.tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    background: rgba(22, 11, 17, .96); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.tabs button {
+    background: none; border: 0; color: var(--muted); padding: 10px 0 12px;
+    font: inherit; font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  nav.tabs button b { font-size: 22px; font-weight: normal; }
+  nav.tabs button.active { color: var(--text); }
+  nav.tabs button.active b { filter: drop-shadow(0 0 6px var(--accent)); }
+
+  /* ---------- Scanner ---------- */
+  .scanner {
+    position: relative; margin-top: 8px; border-radius: 18px; overflow: hidden;
+    background: #000; aspect-ratio: 3 / 4; max-height: 62vh; width: 100%;
+  }
+  .scanner video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .scanner .frame {
+    position: absolute; left: 12%; right: 12%; top: 38%; height: 24%;
+    border: 2px solid rgba(255,255,255,.85); border-radius: 12px;
+    box-shadow: 0 0 0 999px rgba(0,0,0,.35);
+  }
+  .scanner .laser {
+    position: absolute; left: 14%; right: 14%; top: 50%; height: 2px;
+    background: var(--accent); box-shadow: 0 0 12px var(--accent);
+    animation: sweep 1.6s ease-in-out infinite alternate;
+  }
+  @keyframes sweep { from { transform: translateY(-28px); } to { transform: translateY(28px); } }
+  .scanner .hint {
+    position: absolute; bottom: 12px; left: 0; right: 0; text-align: center;
+    color: #fff; font-size: 13px; text-shadow: 0 1px 3px #000;
+  }
+  .scanner .start {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; background: #0d0609; color: var(--muted); text-align: center; padding: 24px;
+  }
+  .cam-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; }
+  .tool {
+    background: rgba(0,0,0,.55); color: #fff; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 999px; padding: 7px 11px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .tool.on { background: var(--accent-2); color: #2a1408; border-color: var(--accent-2); }
+  .manual { display: flex; gap: 8px; margin-top: 12px; }
+  .manual input { flex: 1; }
+
+  /* ---------- Forms ---------- */
+  input, select {
+    background: var(--surface); border: 1px solid var(--line); color: var(--text);
+    border-radius: 12px; padding: 11px 12px; font: inherit; width: 100%; min-width: 0;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  label.field { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 13px; }
+  .btn {
+    border: 0; border-radius: 12px; padding: 13px 16px; font: inherit; font-weight: 600;
+    background: var(--surface-2); color: var(--text); cursor: pointer; text-align: center;
+    text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.gold { background: var(--accent-2); color: #2a1408; }
+  .btn.danger { background: var(--danger); color: #fff; }
+  .btn:disabled { opacity: .4; }
+  .btn.block { width: 100%; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+
+  /* ---------- Bottom sheet ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20;
+    display: none; align-items: flex-end;
+  }
+  .overlay.open { display: flex; }
+  .sheet {
+    width: 100%; max-height: 88vh; overflow-y: auto; background: var(--surface);
+    border-radius: 22px 22px 0 0; padding: 10px 16px calc(20px + env(safe-area-inset-bottom));
+    animation: up .22s ease-out;
+  }
+  @keyframes up { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+  .grip { width: 40px; height: 4px; background: var(--line); border-radius: 4px; margin: 4px auto 12px; }
+  .sheet h2 { margin: 0 0 4px; font-size: 19px; line-height: 1.25; }
+  .sheet h3 { margin: 18px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .wine-head { display: flex; gap: 14px; align-items: flex-start; }
+  .wine-head img { width: 62px; height: 92px; object-fit: contain; background: #fff; border-radius: 10px; flex: none; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px;
+    padding: 3px 10px; font-size: 12px; color: var(--text);
+  }
+  .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 18px; }
+  .actions .btn { flex-direction: column; padding: 12px 6px; font-size: 13px; }
+  .actions .btn b { font-size: 20px; font-weight: normal; }
+  .choice {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 12px; padding: 12px; margin-bottom: 8px; font: inherit; cursor: pointer;
+  }
+  .choice.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .choice .grow { flex: 1; min-width: 0; }
+  .choice small { color: var(--muted); display: block; }
+  .stepper { display: flex; align-items: center; gap: 10px; }
+  .stepper button { width: 44px; height: 44px; font-size: 20px; }
+  .stepper output { min-width: 32px; text-align: center; font-size: 20px; font-weight: 700; }
+  .loading { display: flex; align-items: center; gap: 12px; padding: 24px 4px; color: var(--muted); }
+  .spin {
+    width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent);
+    animation: rot .8s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ---------- Cellar list ---------- */
+  .toolbar { position: sticky; top: 0; background: var(--bg); padding: 8px 0 10px; z-index: 2; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .filters select { padding: 9px 10px; font-size: 14px; }
+  .count { color: var(--muted); font-size: 13px; margin: 6px 2px; display: flex; justify-content: space-between; gap: 8px; }
+  .count label { display: flex; align-items: center; gap: 6px; }
+  .count input { width: auto; }
+  .wine {
+    display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px; margin-bottom: 8px; cursor: pointer; width: 100%; text-align: left;
+    color: var(--text); font: inherit;
+  }
+  .wine .dot { width: 10px; align-self: stretch; border-radius: 6px; flex: none; }
+  .wine .grow { flex: 1; min-width: 0; }
+  .wine .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wine .qty {
+    flex: none; min-width: 38px; height: 38px; border-radius: 10px; background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .wine.empty { opacity: .5; }
+  .status { font-size: 12px; }
+
+  /* ---------- Stats ---------- */
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+  .kpi b { display: block; font-size: 24px; }
+  .kpi span { color: var(--muted); font-size: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-top: 10px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; }
+  .chart-box { position: relative; height: 240px; }
+  .chart-box.tall { height: 320px; }
+
+  .empty-state { text-align: center; color: var(--muted); padding: 40px 16px; }
+  .toast {
+    position: fixed; left: 16px; right: 16px; top: calc(env(safe-area-inset-top) + 12px); z-index: 30;
+    background: #f3e9ee; color: #1c0d14; border-radius: 12px; padding: 12px 14px; font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    transform: translateY(-20px); opacity: 0; pointer-events: none; transition: .2s;
+  }
+  .toast.show { transform: none; opacity: 1; }
+  .toast.err { background: var(--danger); color: #fff; }
+  a { color: var(--accent-2); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🍷 Cel<span>lier</span></h1>
+  <button class="icon-btn" id="btnRefresh" title="Actualiser">⟳</button>
+  <button class="icon-btn" id="btnSettings" title="Réglages">⚙</button>
+</header>
+
+<main>
+  <!-- ================= Scanner ================= -->
+  <section class="view" id="view-scan">
+    <div class="scanner">
+      <video id="video" playsinline muted></video>
+      <div class="frame"></div>
+      <div class="laser"></div>
+      <div class="hint" id="scanHint">Vise le code-barres de la bouteille</div>
+      <div class="cam-tools">
+        <button class="tool" id="btnCam" title="Changer de caméra">⟲ Caméra</button>
+        <button class="tool" id="btnZoom" title="Zoom">2×</button>
+        <button class="tool" id="btnTorch" title="Lampe">🔦</button>
+      </div>
+      <div class="start" id="scanStart">
+        <div style="font-size:42px">📷</div>
+        <div id="scanMsg">Touchez pour lancer la caméra</div>
+        <button class="btn primary" id="btnStartScan">Scanner une bouteille</button>
+      </div>
+    </div>
+    <form class="manual" id="manualForm">
+      <input id="manualCode" inputmode="numeric" placeholder="Ou entrer le code-barres / code SAQ">
+      <button class="btn" type="submit">OK</button>
+    </form>
+  </section>
+
+  <!-- ================= Cellier ================= -->
+  <section class="view" id="view-cellar">
+    <div class="toolbar">
+      <input id="q" type="search" placeholder="Rechercher un vin, un producteur…">
+      <div class="filters">
+        <select id="fType"></select>
+        <select id="fPays"></select>
+        <select id="fCepage"></select>
+        <select id="fPastille"></select>
+        <select id="fStatut"></select>
+        <select id="sort">
+          <option value="score">Tri : à boire d'abord</option>
+          <option value="nom">Tri : nom</option>
+          <option value="millesime">Tri : millésime</option>
+          <option value="prix">Tri : prix</option>
+          <option value="pays">Tri : pays</option>
+          <option value="qte">Tri : quantité</option>
+        </select>
+      </div>
+      <div class="count">
+        <span id="count"></span>
+        <label><input type="checkbox" id="showEmpty"> Épuisés</label>
+      </div>
+    </div>
+    <div id="list"></div>
+  </section>
+
+  <!-- ================= Stats ================= -->
+  <section class="view" id="view-stats">
+    <div class="kpis" id="kpis"></div>
+    <div class="card"><h3>Prêt à boire ?</h3><div class="chart-box"><canvas id="chStatut"></canvas></div></div>
+    <div class="card"><h3>Par type</h3><div class="chart-box"><canvas id="chType"></canvas></div></div>
+    <div class="card"><h3>Par pays</h3><div class="chart-box tall"><canvas id="chPays"></canvas></div></div>
+    <div class="card"><h3>Par millésime</h3><div class="chart-box"><canvas id="chMillesime"></canvas></div></div>
+    <div class="card"><h3>Cépages les plus présents</h3><div class="chart-box tall"><canvas id="chCepage"></canvas></div></div>
+    <div class="card"><h3>Bouteilles bues — 12 derniers mois</h3><div class="chart-box"><canvas id="chBues"></canvas></div></div>
+  </section>
+</main>
+
+<nav class="tabs">
+  <button data-tab="scan"><b>⌁</b>Scanner</button>
+  <button data-tab="cellar"><b>▤</b>Cellier</button>
+  <button data-tab="stats"><b>◔</b>Stats</button>
+</nav>
+
+<div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   État & utilitaires
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('cellier.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('cellier.' + k, JSON.stringify(v)); } catch (e) {} }
+};
+const S = {
+  url: store.get('url', ''),
+  token: store.get('token', ''),
+  wines: store.get('wines', []),
+  archive: store.get('archive', []),
+  tab: 'scan',
+  current: null,
+  charts: {}
+};
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const num = v => { const n = Number(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.\-]/g, '')); return isFinite(n) ? n : 0; };
+const qty = w => num(w['Qté']);
+const money = n => n.toLocaleString('fr-CA', { style: 'currency', currency: 'CAD' });
+const pct = s => (s === '' || s == null) ? '' : Math.round(num(s) * 100) + ' %';
+const TYPE_COLORS = { Rouge: '#9b1d42', Blanc: '#e6cf73', 'Rosé': '#ee9db2', Mousseux: '#bcd8ea', Dessert: '#c98a2b' };
+const STATUS_ORDER = ['🚨 Fin de fenêtre', '🔥 À boire', '🍷 Ouvrir 1 bouteille', '🟠 Bientôt', '👀 Surveiller actif', '🟢 Attendre'];
+const STATUS_COLORS = ['#e26363', '#ef8a3c', '#c2375f', '#e8b04b', '#8fa7d9', '#6cc59a'];
+
+function toast(msg, isErr) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = 'toast'; }, isErr ? 4500 : 2600);
+}
+
+async function api(action, params = {}, post = false) {
+  if (!S.url || !S.token) { openSettings(); throw new Error("Configure d'abord l'adresse du script et le jeton."); }
+  let res;
+  if (post) {
+    // Content-Type text/plain par défaut : pas de requête préliminaire CORS
+    res = await fetch(S.url, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, params)) });
+  } else {
+    const q = new URLSearchParams(Object.assign({ action, token: S.token }, params));
+    res = await fetch(S.url + (S.url.includes('?') ? '&' : '?') + q.toString());
+  }
+  let j;
+  try { j = await res.json(); } catch (e) { throw new Error('Réponse invalide du script (déploiement à vérifier).'); }
+  if (!j.ok) throw new Error(j.error || 'Erreur inconnue');
+  return j;
+}
+
+/* =====================================================================
+   Données
+   ===================================================================== */
+async function loadData(quiet) {
+  if (!S.url || !S.token) return;
+  try {
+    const [c, a] = await Promise.all([api('cellar'), api('archive')]);
+    S.wines = c.wines || [];
+    S.archive = a.rows || [];
+    store.set('wines', S.wines);
+    store.set('archive', S.archive);
+    buildFilters();
+    renderList();
+    if (S.tab === 'stats') renderStats();
+    if (!quiet) toast('Cellier à jour');
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+/* =====================================================================
+   Onglets
+   ===================================================================== */
+/*
+ * Bouton Retour d'Android :
+ *   historique = [scanner] ou [scanner, autre onglet], + une entrée tant qu'une carte est ouverte.
+ *   Retour ferme la carte, puis ramène au scanner ; depuis le scanner, il quitte l'app.
+ */
+let ignorePop = false;
+
+function setTab(tab) {
+  const cur = (history.state && history.state.tab) || 'scan';
+  if (tab === 'scan') {
+    if (cur !== 'scan') { ignorePop = true; history.back(); }
+  } else if (cur === 'scan') {
+    history.pushState({ tab }, '');
+  } else {
+    history.replaceState({ tab }, '');
+  }
+  applyTab(tab);
+}
+
+window.addEventListener('popstate', e => {
+  if (ignorePop) { ignorePop = false; return; }
+  if (isSheetOpen()) { hideSheet(); return; }
+  applyTab((e.state && e.state.tab) || 'scan');
+});
+
+function applyTab(tab) {
+  S.tab = tab;
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + tab));
+  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  if (tab === 'scan') startScan(); else stopScan();
+  if (tab === 'cellar') renderList();
+  if (tab === 'stats') renderStats();
+}
+document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+/* =====================================================================
+   Scanner
+   ===================================================================== */
+// Un code n'est accepté que s'il a un chiffre de contrôle valide
+// ET qu'il a été lu CONFIRM_READS fois à l'identique.
+const CONFIRM_READS = 3;
+const ZOOM_STEPS = [1, 1.5, 2, 3];
+const scan = {
+  stream: null, track: null, detector: null, running: false, reads: {},
+  camId: store.get('camId', ''), zoom: store.get('zoom', 2), torch: false
+};
+
+/** Chiffre de contrôle GTIN (EAN-8, UPC-A, EAN-13, GTIN-14). */
+function validGtin(code) {
+  const d = String(code || '');
+  if (!/^\d+$/.test(d) || ![8, 12, 13, 14].includes(d.length)) return false;
+  const digits = d.split('').map(Number);
+  const check = digits.pop();
+  const sum = digits.reverse().reduce((s, n, i) => s + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+/** Numéro de capteur dans le libellé Android ("camera2 0, facing back" → 0). */
+const camNum = label => {
+  const m = String(label).match(/camera\d*\s+(\d+)/i) || String(label).match(/(\d+)\s*,/) || String(label).match(/(\d+)/);
+  return m ? Number(m[1]) : 99;
+};
+
+async function backCameras() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const back = devs.filter(d => /back|arri[eè]re|rear|environment/i.test(d.label));
+  return (back.length ? back : devs).sort((a, b) => camNum(a.label) - camNum(b.label));
+}
+
+function stopTracks() {
+  if (scan.stream) scan.stream.getTracks().forEach(t => t.stop());
+  scan.stream = null;
+  scan.track = null;
+}
+
+async function openCamera(deviceId) {
+  const video = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  if (deviceId) video.deviceId = { exact: deviceId };
+  else video.facingMode = { ideal: 'environment' };
+  scan.stream = await navigator.mediaDevices.getUserMedia({ video });
+  scan.track = scan.stream.getVideoTracks()[0];
+  const v = $('#video');
+  v.srcObject = scan.stream;
+  await v.play();
+  await tuneCamera();
+}
+
+/** Mise au point continue, zoom et lampe quand le capteur les offre. */
+async function tuneCamera() {
+  const t = scan.track;
+  const caps = (t && t.getCapabilities) ? t.getCapabilities() : {};
+  const adv = {};
+  if (caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+  let z = 1;
+  if (caps.zoom) {
+    z = Math.min(caps.zoom.max, Math.max(caps.zoom.min, scan.zoom));
+    adv.zoom = z;
+  }
+  if (caps.torch) adv.torch = scan.torch;
+  try { if (Object.keys(adv).length) await t.applyConstraints({ advanced: [adv] }); } catch (e) { /* ignoré */ }
+  $('#btnZoom').style.display = caps.zoom ? '' : 'none';
+  $('#btnZoom').textContent = (Math.round(z * 10) / 10) + '×';
+  $('#btnTorch').style.display = caps.torch ? '' : 'none';
+  $('#btnTorch').classList.toggle('on', !!scan.torch);
+}
+
+function cameraError() {
+  scan.running = false;
+  $('#scanStart').style.display = 'flex';
+  $('#scanMsg').textContent = "Caméra non disponible. Autorise l'accès à la caméra, puis réessaie.";
+}
+
+async function startScan() {
+  if (scan.running || isSheetOpen()) return;
+  if (!('BarcodeDetector' in window)) {
+    $('#scanMsg').textContent = "Ce navigateur ne lit pas les codes-barres. Utilise Chrome sur Android, ou entre le code à la main.";
+    $('#btnStartScan').style.display = 'none';
+    return;
+  }
+  try {
+    if (!scan.detector) {
+      const wanted = ['ean_13', 'upc_a', 'ean_8'];
+      const supported = await BarcodeDetector.getSupportedFormats();
+      scan.detector = new BarcodeDetector({ formats: wanted.filter(f => supported.includes(f)) });
+    }
+    try {
+      await openCamera(scan.camId);
+    } catch (e) {
+      if (!scan.camId) throw e;
+      scan.camId = ''; store.set('camId', '');      // caméra mémorisée disparue
+      await openCamera('');
+    }
+    // Première fois : choisir le capteur principal (le plus petit numéro à l'arrière)
+    if (!scan.camId) {
+      const cams = await backCameras();
+      const main = cams[0];
+      const current = scan.track.getSettings().deviceId;
+      if (main && main.deviceId && main.deviceId !== current) {
+        stopTracks();
+        try { await openCamera(main.deviceId); } catch (e) { await openCamera(''); }
+      }
+      scan.camId = (scan.track.getSettings().deviceId) || '';
+      store.set('camId', scan.camId);
+    }
+  } catch (e) {
+    return cameraError();
+  }
+  scan.reads = {};
+  scan.running = true;
+  $('#scanStart').style.display = 'none';
+  setScanHint();
+  detectLoop();
+}
+
+function stopScan() {
+  scan.running = false;
+  stopTracks();
+  $('#scanStart').style.display = 'flex';
+  $('#scanMsg').textContent = 'Touchez pour lancer la caméra';
+}
+
+function setScanHint() {
+  const best = Math.max(0, ...Object.values(scan.reads));
+  $('#scanHint').textContent = best
+    ? 'Lecture… ' + '●'.repeat(best) + '○'.repeat(Math.max(0, CONFIRM_READS - best))
+    : 'Vise le code-barres de la bouteille';
+}
+
+async function detectLoop() {
+  if (!scan.running) return;
+  try {
+    const codes = await scan.detector.detect($('#video'));
+    for (const c of codes) {
+      const code = String(c.rawValue || '').trim();
+      if (!validGtin(code)) continue;               // lecture partielle ou erronée
+      scan.reads[code] = (scan.reads[code] || 0) + 1;
+      if (scan.reads[code] >= CONFIRM_READS) {
+        stopScan();
+        if (navigator.vibrate) navigator.vibrate(60);
+        openLookup(code);
+        return;
+      }
+    }
+    if (codes.length) setScanHint();
+  } catch (e) { /* image pas prête */ }
+  setTimeout(detectLoop, 90);
+}
+
+async function switchCamera() {
+  try {
+    const cams = await backCameras();
+    if (cams.length < 2) return toast('Une seule caméra disponible');
+    const i = cams.findIndex(c => c.deviceId === scan.camId);
+    const next = cams[(i + 1) % cams.length];
+    stopTracks();
+    await openCamera(next.deviceId);
+    scan.camId = next.deviceId;
+    store.set('camId', scan.camId);
+    scan.reads = {};
+    toast('Caméra ' + ((i + 1) % cams.length + 1) + '/' + cams.length + (next.label ? ' — ' + next.label : ''));
+  } catch (e) {
+    toast('Impossible de changer de caméra', true);
+  }
+}
+
+$('#btnStartScan').addEventListener('click', startScan);
+$('#btnCam').addEventListener('click', switchCamera);
+$('#btnZoom').addEventListener('click', async () => {
+  const i = ZOOM_STEPS.findIndex(z => z >= scan.zoom - 0.01);
+  scan.zoom = ZOOM_STEPS[(i + 1) % ZOOM_STEPS.length];
+  store.set('zoom', scan.zoom);
+  await tuneCamera();
+});
+$('#btnTorch').addEventListener('click', async () => {
+  scan.torch = !scan.torch;
+  await tuneCamera();
+});
+$('#manualForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#manualCode').value.trim();
+  if (!v) return;
+  $('#manualCode').value = '';
+  stopScan();
+  // 8 chiffres = code SAQ ; plus long = code-barres
+  const digits = v.replace(/\D/g, '');
+  if (digits.length === 8 && !digits.startsWith('0')) openLookup('', digits);
+  else openLookup(v);
+});
+
+/* =====================================================================
+   Feuille du bas (bottom sheet)
+   ===================================================================== */
+function openSheet(html) {
+  if (!isSheetOpen()) {
+    // Une entrée d'historique par carte ouverte : Retour la ferme au lieu de changer d'onglet
+    history.pushState({ tab: S.tab, sheet: true }, '');
+  }
+  $('#sheet').innerHTML = '<div class="grip"></div>' + html;
+  $('#overlay').classList.add('open');
+  $('#sheet').scrollTop = 0;
+}
+
+/** Fermeture par un bouton de l'app : retire aussi l'entrée d'historique de la carte. */
+function closeSheet() {
+  if (!isSheetOpen()) return;
+  if (history.state && history.state.sheet) { ignorePop = true; history.back(); }
+  hideSheet();
+}
+
+/** Fermeture effective (aussi appelée par le bouton Retour). */
+function hideSheet() {
+  $('#overlay').classList.remove('open');
+  S.current = null;
+  if (S.tab === 'scan') setTimeout(startScan, 150);
+}
+function isSheetOpen() { return $('#overlay').classList.contains('open'); }
+$('#overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closeSheet(); });
+
+function loadingSheet(msg) {
+  openSheet('<div class="loading"><div class="spin"></div>' + esc(msg) + '</div>');
+}
+
+/* =====================================================================
+   Recherche d'une bouteille → carte d'action
+   ===================================================================== */
+async function openLookup(barcode, saq) {
+  loadingSheet('Recherche de la bouteille…');
+  try {
+    const params = {};
+    if (barcode) params.barcode = barcode;
+    if (saq) params.saq = saq;
+    const r = await api('lookup', params);
+    S.current = {
+      barcode: r.barcode || '',
+      saq: r.saq || '',
+      product: r.product,
+      matches: r.matches || [],
+      suggestions: r.suggestions || []
+    };
+    renderCard();
+  } catch (e) {
+    openSheet('<h2>Oups</h2><p class="meta">' + esc(e.message) + '</p>' +
+      '<button class="btn block" onclick="closeSheet()">Fermer</button>');
+  }
+}
+
+/** Ouvrir la carte depuis la liste du cellier (pas de requête SAQ). */
+function openFromList(row) {
+  const w = S.wines.find(x => x.row === row);
+  if (!w) return;
+  const same = S.wines.filter(x => String(x['Nom']).trim() === String(w['Nom']).trim());
+  S.current = { barcode: '', saq: String(w['Code SAQ'] || ''), product: null, matches: same, suggestions: [], fromList: true };
+  renderCard();
+}
+
+function cardHeader(c) {
+  const p = c.product;
+  const m = c.matches[0] || {};
+  const name = (p && p.name) || m['Nom'] || 'Bouteille inconnue';
+  const bits = p
+    ? [p.type, p.country, p.region].filter(Boolean)
+    : [m['Type'], m['Pays'], m['Région / Appellation']].filter(Boolean);
+  const chips = [];
+  const pastille = (p && p.pastille) || m['Pastille'];
+  if (pastille) chips.push(pastille);
+  const price = (p && p.price) || num(m['Prix']);
+  if (price) chips.push(money(price));
+  if (p && p.gardeText) chips.push('⏳ ' + p.gardeText);
+  if (p && p.grape) chips.push(p.grape);
+  else if (m['Cépage']) chips.push(m['Cépage']);
+  return '<div class="wine-head">' +
+    (p && p.image ? '<img src="' + esc(p.image) + '" alt="">' : '') +
+    '<div><h2>' + esc(name) + '</h2><div class="meta">' + esc(bits.join(' · ')) + '</div>' +
+    '<div class="chips">' + chips.map(x => '<span class="chip">' + esc(x) + '</span>').join('') + '</div></div></div>';
+}
+
+function matchLine(m) {
+  return '<div class="grow"><b>' + esc(m['Millésime'] || 'Sans millésime') + '</b> — ' + qty(m) + ' btl' +
+    '<small>' + esc(m['Statut'] || '') + (m['Score'] !== '' && m['Score'] != null ? ' · ' + pct(m['Score']) : '') +
+    (m["Jusqu'à"] ? ' · jusqu’à ' + esc(m["Jusqu'à"]) : '') + '</small></div>';
+}
+
+function renderCard() {
+  const c = S.current;
+  if (!c) return;
+  const inStock = c.matches.filter(m => qty(m) > 0);
+  let html = cardHeader(c);
+
+  html += '<h3>Dans ton cellier</h3>';
+  if (c.matches.length) {
+    html += c.matches
+      .slice().sort((a, b) => num(a['Millésime']) - num(b['Millésime']))
+      .map(m => '<div class="choice">' + matchLine(m) + '</div>').join('');
+  } else if (c.suggestions.length) {
+    html += '<p class="meta">Cette bouteille n’est pas encore liée à ta feuille. ' +
+      'Ces vins de ton cellier ont un nom qui ressemble. Est-ce l’un d’eux ?</p>' +
+      c.suggestions.map((s, i) =>
+        '<button class="choice" onclick="linkSuggestion(' + i + ')">' + suggestionLine(s) +
+        '<span class="chip">C’est lui</span></button>').join('') +
+      '<button class="btn block" onclick="dismissSuggestions()">Aucun : c’est un nouveau vin</button>';
+  } else if (!c.product && c.barcode) {
+    html += '<p class="meta">Code lu : <b>' + esc(c.barcode) + '</b> — introuvable à la SAQ et dans ta feuille. ' +
+      'Si ce n’est pas le code de la bouteille, rescanne.</p>' +
+      '<button class="btn block" onclick="closeSheet()">⌁ Rescanner</button>';
+  } else {
+    html += '<p class="meta">Pas encore dans le cellier.</p>';
+  }
+
+  const infoUrl = c.saq
+    ? 'https://www.saq.com/fr/' + encodeURIComponent(c.saq)
+    : 'https://www.saq.com/fr/catalogsearch/result/?q=' + encodeURIComponent((c.product && c.product.name) || (c.matches[0] || {})['Nom'] || c.barcode);
+
+  html += '<div class="actions">' +
+    '<a class="btn" href="' + esc(infoUrl) + '" target="_blank" rel="noopener"><b>ⓘ</b>Voir l’info</a>' +
+    '<button class="btn gold" onclick="startAdd()"><b>＋</b>Ajouter</button>' +
+    '<button class="btn primary" onclick="startRemove()"' + (inStock.length ? '' : ' disabled') + '><b>−</b>Retirer</button>' +
+    '</div>';
+  html += '<button class="btn block" style="margin-top:10px" onclick="closeSheet()">Fermer</button>';
+  openSheet(html);
+}
+
+/** Ligne d'une suggestion : le nom du vin d'abord, pour savoir de quelle bouteille il s'agit. */
+function suggestionLine(s) {
+  return '<div class="grow"><b>' + esc(s['Nom']) + '</b> ' + esc(s['Millésime'] || '') +
+    '<small>' + esc([s['Producteur'], s['Pays']].filter(Boolean).join(' · ')) + '</small>' +
+    '<small>' + qty(s) + ' btl · ' + esc(s['Statut'] || '') +
+    (s['Score'] !== '' && s['Score'] != null ? ' · ' + pct(s['Score']) : '') + '</small></div>';
+}
+
+function dismissSuggestions() {
+  S.current.suggestions = [];
+  renderCard();
+}
+
+function linkSuggestion(i) {
+  const c = S.current;
+  c.matches = [c.suggestions[i]];
+  c.suggestions = [];
+  renderCard();
+  toast('Le code-barres sera lié à ce vin au prochain ajout ou retrait');
+}
+
+/* ---------------------------- Retirer ---------------------------- */
+function startRemove() {
+  const c = S.current;
+  const list = c.matches.filter(m => qty(m) > 0).sort((a, b) => num(b['Score']) - num(a['Score']));
+  if (!list.length) return toast('Plus de bouteille de ce vin', true);
+  if (list.length === 1) return confirmRemove(list[0]);
+  openSheet(cardHeader(c) + '<h3>Quel millésime ?</h3>' +
+    '<p class="meta">Le plus urgent à boire est en premier.</p>' +
+    list.map(m => '<button class="choice" onclick="confirmRemove(S.current.matches.find(x=>x.row===' + m.row + '))">' +
+      matchLine(m) + '</button>').join('') +
+    '<button class="btn block" onclick="renderCard()">Retour</button>');
+}
+
+function confirmRemove(m) {
+  const c = S.current;
+  openSheet(cardHeader(c) +
+    '<h3>Retirer une bouteille</h3>' +
+    '<div class="choice">' + matchLine(m) + '</div>' +
+    '<label class="field" for="avec">Bu avec (facultatif)</label>' +
+    '<input id="avec" placeholder="ex. Souper chez Simon">' +
+    '<div class="row" style="margin-top:16px">' +
+    '<button class="btn" onclick="renderCard()">Annuler</button>' +
+    '<button class="btn primary" id="btnDoRemove">Retirer 1 bouteille</button></div>');
+  $('#btnDoRemove').addEventListener('click', () => doRemove(m));
+}
+
+async function doRemove(m) {
+  const c = S.current;
+  const avec = ($('#avec') || {}).value || '';
+  $('#btnDoRemove').disabled = true;
+  loadingSheet('Mise à jour de la feuille…');
+  try {
+    const r = await api('remove', {
+      row: m.row, name: m['Nom'], vintage: m['Millésime'], avec,
+      barcode: c.barcode, saq: c.saq
+    }, true);
+    toast('Santé ! Il en reste ' + r.remaining + '.');
+    closeSheet();
+    loadData(true);
+  } catch (e) {
+    toast(e.message, true);
+    renderCard();
+  }
+}
+
+/* ---------------------------- Ajouter ---------------------------- */
+function startAdd() {
+  const c = S.current;
+  c.add = { target: c.matches.length ? c.matches[0].row : 'new', qty: 1 };
+  renderAdd();
+}
+
+function renderAdd() {
+  const c = S.current;
+  const a = c.add;
+  const p = c.product;
+  const vintages = c.matches.slice().sort((x, y) => num(y['Millésime']) - num(x['Millésime']));
+  let html = cardHeader(c) + '<h3>Ajouter au cellier</h3>';
+
+  if (vintages.length) {
+    html += vintages.map(m =>
+      '<button class="choice' + (a.target === m.row ? ' selected' : '') + '" onclick="pickAdd(' + m.row + ')">' +
+      matchLine(m) + '</button>').join('');
+  }
+  html += '<button class="choice' + (a.target === 'new' ? ' selected' : '') + '" onclick="pickAdd(\'new\')">' +
+    '<div class="grow"><b>' + (vintages.length ? 'Un autre millésime' : 'Nouveau vin') + '</b>' +
+    '<small>' + (p ? 'Fiche remplie avec les infos SAQ' : 'Entrée manuelle') + '</small></div></button>';
+
+  if (a.target === 'new') {
+    if (!p && !c.matches.length) {
+      html += '<label class="field" for="addName">Nom du vin</label><input id="addName" placeholder="Nom">' +
+        '<label class="field" for="addPlace">Lieu d’achat</label><input id="addPlace" value="' + (c.saq ? 'SAQ' : 'Hors SAQ') + '">';
+    }
+    const guess = (p && p.vintage) || '';
+    html += '<label class="field" for="addVintage">Millésime sur la bouteille</label>' +
+      '<input id="addVintage" inputmode="numeric" maxlength="4" placeholder="ex. 2021" value="' + esc(guess) + '">';
+  }
+
+  html += '<label class="field">Nombre de bouteilles</label>' +
+    '<div class="stepper"><button class="btn" onclick="stepAdd(-1)">−</button><output id="addQty">' + a.qty +
+    '</output><button class="btn" onclick="stepAdd(1)">＋</button></div>' +
+    '<div class="row" style="margin-top:16px"><button class="btn" onclick="renderCard()">Annuler</button>' +
+    '<button class="btn gold" id="btnDoAdd">Ajouter</button></div>';
+  openSheet(html);
+  $('#btnDoAdd').addEventListener('click', doAdd);
+}
+
+function pickAdd(t) { S.current.add.target = t; renderAdd(); }
+function stepAdd(d) {
+  const a = S.current.add;
+  a.qty = Math.max(1, Math.min(48, a.qty + d));
+  $('#addQty').textContent = a.qty;
+}
+
+async function doAdd() {
+  const c = S.current;
+  const a = c.add;
+  const params = { qty: a.qty, barcode: c.barcode, saq: c.saq };
+
+  if (a.target === 'new') {
+    const v = ($('#addVintage') || {}).value || '';
+    if (v && !/^(19|20)\d{2}$/.test(v.trim())) return toast('Millésime invalide (4 chiffres)', true);
+    const dup = c.matches.find(m => String(m['Millésime']) === v.trim());
+    if (dup) { a.target = dup.row; renderAdd(); return toast('Ce millésime est déjà dans ta feuille : sélectionné.'); }
+    params.vintage = v.trim();
+    if (!c.product && !c.matches.length) {
+      params.name = (($('#addName') || {}).value || '').trim();
+      params.place = (($('#addPlace') || {}).value || '').trim();
+      if (!params.name) return toast('Indique le nom du vin', true);
+    } else if (!c.product && c.matches.length) {
+      params.name = c.matches[0]['Nom'];
+    }
+  } else {
+    const m = c.matches.find(x => x.row === a.target);
+    Object.assign(params, { row: m.row, name: m['Nom'], vintage: m['Millésime'] });
+  }
+
+  loadingSheet('Ajout dans la feuille…');
+  try {
+    await api('add', params, true);
+    toast(a.qty > 1 ? a.qty + ' bouteilles ajoutées' : 'Bouteille ajoutée');
+    closeSheet();
+    loadData(true);
+  } catch (e) {
+    toast(e.message, true);
+    renderAdd();
+  }
+}
+
+/* =====================================================================
+   Cellier : filtres, tri, liste
+   ===================================================================== */
+const splitGrapes = s => String(s || '')
+  .split(/,|\/|\bet\b/i)
+  .map(x => x.replace(/\d+\s*%?/g, '').replace(/\s+/g, ' ').trim())
+  .filter(x => x.length > 1)
+  .map(x => x.charAt(0).toUpperCase() + x.slice(1));
+
+function fillSelect(id, label, values) {
+  const el = $(id);
+  const cur = el.value;
+  const uniq = [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+  el.innerHTML = '<option value="">' + label + '</option>' +
+    uniq.map(v => '<option' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('');
+}
+
+function buildFilters() {
+  const ws = S.wines.filter(w => $('#showEmpty').checked || qty(w) > 0);
+  fillSelect('#fType', 'Tous les types', ws.map(w => w['Type']));
+  fillSelect('#fPays', 'Tous les pays', ws.map(w => w['Pays']));
+  fillSelect('#fCepage', 'Tous les cépages', ws.flatMap(w => splitGrapes(w['Cépage'])));
+  fillSelect('#fPastille', 'Toutes les pastilles', ws.map(w => w['Pastille']));
+  const st = $('#fStatut');
+  const cur = st.value;
+  st.innerHTML = '<option value="">Tous les statuts</option>' +
+    STATUS_ORDER.map(s => '<option' + (s === cur ? ' selected' : '') + '>' + s + '</option>').join('');
+}
+
+function filteredWines() {
+  const q = $('#q').value.trim().toLowerCase();
+  const f = { t: $('#fType').value, p: $('#fPays').value, c: $('#fCepage').value, pa: $('#fPastille').value, s: $('#fStatut').value };
+  const showEmpty = $('#showEmpty').checked;
+  let ws = S.wines.filter(w => {
+    if (!showEmpty && qty(w) <= 0) return false;
+    if (f.t && w['Type'] !== f.t) return false;
+    if (f.p && w['Pays'] !== f.p) return false;
+    if (f.c && !splitGrapes(w['Cépage']).includes(f.c)) return false;
+    if (f.pa && w['Pastille'] !== f.pa) return false;
+    if (f.s && w['Statut'] !== f.s) return false;
+    if (q) {
+      const hay = [w['Nom'], w['Producteur'], w['Pays'], w['Région / Appellation'], w['Appellation'], w['Cépage'], w['Millésime']]
+        .join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const by = $('#sort').value;
+  const cmp = {
+    score: (a, b) => num(b['Score']) - num(a['Score']),
+    nom: (a, b) => String(a['Nom']).localeCompare(String(b['Nom']), 'fr'),
+    millesime: (a, b) => num(a['Millésime']) - num(b['Millésime']),
+    prix: (a, b) => num(b['Prix']) - num(a['Prix']),
+    pays: (a, b) => String(a['Pays']).localeCompare(String(b['Pays']), 'fr') || num(b['Score']) - num(a['Score']),
+    qte: (a, b) => qty(b) - qty(a)
+  }[by];
+  return ws.sort(cmp);
+}
+
+function renderList() {
+  const ws = filteredWines();
+  const bottles = ws.reduce((s, w) => s + Math.max(0, qty(w)), 0);
+  $('#count').textContent = ws.length + ' vin' + (ws.length > 1 ? 's' : '') + ' · ' + bottles + ' bouteille' + (bottles > 1 ? 's' : '');
+  if (!S.wines.length) {
+    $('#list').innerHTML = '<div class="empty-state">' +
+      (S.url ? 'Chargement du cellier…' : 'Configure l’app avec ⚙ pour charger ton cellier.') + '</div>';
+    return;
+  }
+  if (!ws.length) { $('#list').innerHTML = '<div class="empty-state">Aucun vin ne correspond.</div>'; return; }
+  $('#list').innerHTML = ws.map(w =>
+    '<button class="wine' + (qty(w) <= 0 ? ' empty' : '') + '" onclick="openFromList(' + w.row + ')">' +
+    '<span class="dot" style="background:' + (TYPE_COLORS[w['Type']] || '#777') + '"></span>' +
+    '<span class="grow"><div class="name">' + esc(w['Nom']) + ' <span class="meta">' + esc(w['Millésime']) + '</span></div>' +
+    '<div class="meta">' + esc([w['Pays'], w['Région / Appellation'], w['Pastille']].filter(Boolean).join(' · ')) + '</div>' +
+    '<div class="status">' + esc(w['Statut'] || '') + (w['Score'] !== '' && w['Score'] != null ? ' · ' + pct(w['Score']) : '') + '</div></span>' +
+    '<span class="qty">' + qty(w) + '</span></button>').join('');
+}
+
+['#q', '#fType', '#fPays', '#fCepage', '#fPastille', '#fStatut', '#sort'].forEach(id =>
+  $(id).addEventListener('input', renderList));
+$('#showEmpty').addEventListener('change', () => { buildFilters(); renderList(); });
+
+/* =====================================================================
+   Statistiques
+   ===================================================================== */
+function countBy(items, keyFn, weightFn) {
+  const m = new Map();
+  items.forEach(it => {
+    const keys = [].concat(keyFn(it)).filter(k => k !== '' && k != null);
+    keys.forEach(k => m.set(k, (m.get(k) || 0) + (weightFn ? weightFn(it) : 1)));
+  });
+  return m;
+}
+
+function chart(id, cfg) {
+  if (S.charts[id]) S.charts[id].destroy();
+  S.charts[id] = new Chart(document.getElementById(id), cfg);
+}
+
+function baseOpts(horizontal) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    indexAxis: horizontal ? 'y' : 'x',
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#b49aa8', precision: 0 }, grid: { color: horizontal ? '#3a2430' : 'transparent' } },
+      y: { ticks: { color: '#e9dbe2', precision: 0 }, grid: { color: horizontal ? 'transparent' : '#3a2430' } }
+    }
+  };
+}
+
+function renderStats() {
+  const stock = S.wines.filter(w => qty(w) > 0);
+  if (!stock.length) { $('#kpis').innerHTML = '<div class="empty-state" style="grid-column:1/-1">Aucune donnée pour l’instant.</div>'; return; }
+  const q = w => qty(w);
+
+  const bottles = stock.reduce((s, w) => s + q(w), 0);
+  const value = stock.reduce((s, w) => s + q(w) * num(w['Prix']), 0);
+  const ready = stock.filter(w => num(w['Score']) >= 0.7).reduce((s, w) => s + q(w), 0);
+  const yearAgo = new Date(); yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+  const drunkYear = S.archive.filter(r => r['Bu le'] && new Date(r['Bu le']) >= yearAgo).length;
+  $('#kpis').innerHTML = [
+    [bottles, 'bouteilles'], [stock.length, 'vins différents'],
+    [money(value), 'valeur du cellier'], [ready, 'prêtes à boire (≥ 70 %)'],
+    [drunkYear, 'bues depuis 12 mois'], [bottles && drunkYear ? (bottles / drunkYear).toLocaleString('fr-CA', { maximumFractionDigits: 1 }) + ' ans' : '—', 'de réserve à ce rythme']
+  ].map(([v, l]) => '<div class="kpi"><b>' + v + '</b><span>' + l + '</span></div>').join('');
+
+  const hasCharts = typeof Chart !== 'undefined';
+  document.querySelectorAll('#view-stats .card').forEach(c => { c.style.display = hasCharts ? '' : 'none'; });
+  if (!hasCharts) {
+    $('#kpis').insertAdjacentHTML('beforeend', '<div class="empty-state" style="grid-column:1/-1">Graphiques indisponibles sans connexion.</div>');
+    return;
+  }
+  Chart.defaults.color = '#e9dbe2';
+  Chart.defaults.font.family = 'system-ui, sans-serif';
+
+  // Statut
+  const byStatus = countBy(stock, w => w['Statut'], q);
+  chart('chStatut', {
+    type: 'bar',
+    data: {
+      labels: STATUS_ORDER,
+      datasets: [{ data: STATUS_ORDER.map(s => byStatus.get(s) || 0), backgroundColor: STATUS_COLORS, borderRadius: 6 }]
+    },
+    options: baseOpts(true)
+  });
+
+  // Type
+  const byType = [...countBy(stock, w => w['Type'] || 'Autre', q)].sort((a, b) => b[1] - a[1]);
+  chart('chType', {
+    type: 'doughnut',
+    data: {
+      labels: byType.map(x => x[0]),
+      datasets: [{ data: byType.map(x => x[1]), backgroundColor: byType.map(x => TYPE_COLORS[x[0]] || '#777'), borderColor: '#24141c', borderWidth: 3 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '58%', plugins: { legend: { position: 'right', labels: { color: '#e9dbe2' } } } }
+  });
+
+  // Pays
+  const byPays = [...countBy(stock, w => w['Pays'] || 'Inconnu', q)].sort((a, b) => b[1] - a[1]).slice(0, 12);
+  chart('chPays', {
+    type: 'bar',
+    data: { labels: byPays.map(x => x[0]), datasets: [{ data: byPays.map(x => x[1]), backgroundColor: '#c2375f', borderRadius: 6 }] },
+    options: baseOpts(true)
+  });
+
+  // Millésime
+  const byMil = [...countBy(stock, w => String(w['Millésime'] || '').trim() || 'NV', q)]
+    .sort((a, b) => (a[0] === 'NV') - (b[0] === 'NV') || num(a[0]) - num(b[0]));
+  chart('chMillesime', {
+    type: 'bar',
+    data: { labels: byMil.map(x => x[0]), datasets: [{ data: byMil.map(x => x[1]), backgroundColor: '#e8b04b', borderRadius: 6 }] },
+    options: baseOpts(false)
+  });
+
+  // Cépages
+  const byGrape = [...countBy(stock, w => splitGrapes(w['Cépage']), q)].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  chart('chCepage', {
+    type: 'bar',
+    data: { labels: byGrape.map(x => x[0]), datasets: [{ data: byGrape.map(x => x[1]), backgroundColor: '#8fa7d9', borderRadius: 6 }] },
+    options: baseOpts(true)
+  });
+
+  // Bues par mois
+  const months = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+  const key = d => d.getFullYear() + '-' + d.getMonth();
+  const drunk = countBy(S.archive.filter(r => r['Bu le']), r => key(new Date(r['Bu le'])));
+  chart('chBues', {
+    type: 'bar',
+    data: {
+      labels: months.map(d => d.toLocaleDateString('fr-CA', { month: 'short' })),
+      datasets: [{ data: months.map(d => drunk.get(key(d)) || 0), backgroundColor: '#6cc59a', borderRadius: 6 }]
+    },
+    options: baseOpts(false)
+  });
+}
+
+/* =====================================================================
+   Réglages
+   ===================================================================== */
+function openSettings() {
+  stopScan();
+  openSheet('<h2>Réglages</h2>' +
+    '<p class="meta">Adresse de l’application web Apps Script (se termine par /exec) et jeton affiché par <code>setup</code>.</p>' +
+    '<label class="field" for="setUrl">Adresse du script</label>' +
+    '<input id="setUrl" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(S.url) + '">' +
+    '<label class="field" for="setToken">Jeton secret</label>' +
+    '<input id="setToken" placeholder="xxxxxxxx-xxxx-…" value="' + esc(S.token) + '">' +
+    '<div class="row" style="margin-top:16px"><button class="btn" onclick="closeSheet()">Fermer</button>' +
+    '<button class="btn primary" id="btnSave">Enregistrer</button></div>');
+  $('#btnSave').addEventListener('click', async () => {
+    S.url = $('#setUrl').value.trim();
+    S.token = $('#setToken').value.trim();
+    store.set('url', S.url);
+    store.set('token', S.token);
+    closeSheet();
+    await loadData();
+  });
+}
+$('#btnSettings').addEventListener('click', openSettings);
+$('#btnRefresh').addEventListener('click', () => loadData());
+
+/* =====================================================================
+   Démarrage
+   ===================================================================== */
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+buildFilters();
+const startTab = new URLSearchParams(location.search).get('tab');
+history.replaceState({ tab: 'scan' }, '');
+setTab(['cellar', 'stats'].includes(startTab) ? startTab : 'scan');
+if (!S.url || !S.token) openSettings(); else loadData(true);
+</script>
+</body>
+</html>
