@@ -104,6 +104,7 @@
     border-radius: 12px; padding: 11px 12px; font: inherit; width: 100%; min-width: 0;
   }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input[type=checkbox] { accent-color: var(--accent); width: 20px; height: 20px; }
   label.field { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 13px; }
   .btn {
     border: 0; border-radius: 12px; padding: 13px 16px; font: inherit; font-weight: 600;
@@ -317,7 +318,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '1.8';
+const APP_VERSION = '1.9';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -788,7 +789,8 @@ function renderCard() {
       c.suggestions.map((s, i) =>
         '<button class="choice" onclick="linkSuggestion(' + i + ')">' + suggestionLine(s) +
         '<span class="chip">C’est lui</span></button>').join('') +
-      '<button class="btn block" onclick="dismissSuggestions()">Aucun : c’est un nouveau vin</button>';
+      '<div class="row"><button class="btn" onclick="startLink()">Une autre bouteille…</button>' +
+      '<button class="btn" onclick="dismissSuggestions()">Nouveau vin</button></div>';
   } else if (!c.product && c.barcode) {
     html += '<p class="meta">Code lu : <b>' + esc(c.barcode) + '</b> — introuvable à la SAQ et dans ta feuille. ' +
       'Si ce n’est pas le code de la bouteille, rescanne. Sinon, tu peux chercher à la LCBO, ' +
@@ -799,9 +801,13 @@ function renderCard() {
       encodeURIComponent(c.barcode.replace(/^0+(?=\d{12,13}$)/, '')) + '">Chercher à la LCBO</a></div>' +
       '<label class="field" for="lcboSku">SKU LCBO trouvé sur lcbo.com</label>' +
       '<div class="row"><input id="lcboSku" inputmode="numeric" placeholder="ex. 78006">' +
-      '<button class="btn gold" onclick="loadLcboSku()">Charger la fiche</button></div>';
+      '<button class="btn gold" onclick="loadLcboSku()">Charger la fiche</button></div>' +
+      '<button class="btn block" style="margin-top:8px" onclick="startLink()">Associer à une bouteille de ma feuille…</button>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
+    if (c.barcode || c.saq) {
+      html += '<button class="btn block" onclick="startLink()">Elle y est sous un autre nom : l’associer…</button>';
+    }
   }
 
   if (hist.length) {
@@ -840,12 +846,114 @@ function dismissSuggestions() {
   renderCard();
 }
 
+/* ---------------------------- Associer une bouteille scannée à une ligne ---------------------------- */
+/*
+ * Le code-barres (et le code SAQ) sont enregistrés sur la ligne choisie, et ses colonnes peuvent être
+ * mises à jour avec la fiche SAQ / LCBO. Le prochain scan reconnaît directement le vin.
+ */
+// [colonne, champ de la fiche, coché par défaut si la feuille a déjà une valeur différente]
+const LINK_FIELDS = [
+  ['Nom', 'name', false], ['Producteur', 'producer', true], ['Pays', 'country', true],
+  ['Région / Appellation', 'region', true], ['Appellation', 'appellation', true], ['Type', 'type', true],
+  ['Cépage', 'grape', true], ['Pastille', 'pastille', true], ['Garde', 'gardeYears', false], ['Prix', 'price', false]
+];
+
 function linkSuggestion(i) {
+  const s = S.current.suggestions[i];
+  linkPick(s.row, s);
+}
+
+/** Choisir la ligne parmi toute la feuille (le nom peut être très différent de celui de la SAQ). */
+function startLink() {
   const c = S.current;
-  c.matches = [c.suggestions[i]];
-  c.suggestions = [];
-  renderCard();
-  toast('Le code-barres sera lié à ce vin au prochain ajout ou retrait');
+  openSheet(cardHeader(c) + '<h3>À quelle bouteille de ta feuille ?</h3>' +
+    '<input id="linkQ" type="search" placeholder="Rechercher par nom, producteur, millésime…">' +
+    '<div id="linkList" style="margin-top:10px"></div>' +
+    '<button class="btn block" onclick="renderCard()">Retour</button>');
+  $('#linkQ').addEventListener('input', renderLinkList);
+  renderLinkList();
+}
+
+function renderLinkList() {
+  const q = normName(($('#linkQ') || {}).value || '');
+  const rows = S.wines
+    .filter(w => !q || normName([w['Nom'], w['Producteur'], w['Millésime'], w['Pays']].join(' ')).includes(q))
+    .sort((a, b) => String(a['Nom']).localeCompare(String(b['Nom']), 'fr') || num(a['Millésime']) - num(b['Millésime']))
+    .slice(0, 40);
+  $('#linkList').innerHTML = rows.length
+    ? rows.map(w => '<button class="choice" onclick="linkPick(' + w.row + ')">' + suggestionLine(w) + '</button>').join('')
+    : '<p class="meta">Aucun vin ne correspond.</p>';
+}
+
+const sameVal = (a, b) => {
+  const x = cellStr(a).trim(), y = cellStr(b).trim();
+  if (x === y) return true;
+  if (/^-?\d+([.,]\d+)?$/.test(x) && /^-?\d+([.,]\d+)?$/.test(y)) return num(x) === num(y);
+  return x.toLowerCase() === y.toLowerCase();
+};
+
+/** Écran de comparaison : ce que la fiche changerait dans la ligne choisie. */
+function linkPick(row, fallback) {
+  const c = S.current;
+  const w = S.wines.find(x => x.row === row) || fallback;
+  if (!w) return toast('Ligne introuvable : actualise le cellier (⟳)', true);
+  c.link = { w };
+  const p = c.product || {};
+  const src = { SAQ: 'SAQ', LCBO: 'LCBO', OFF: 'Open Food Facts' }[p.source] || 'SAQ';
+  const diffs = LINK_FIELDS
+    .map(([h, key, onIfFilled]) => ({ h, v: p[key], old: w[h], on: onIfFilled }))
+    .filter(d => d.v !== null && d.v !== undefined && cellStr(d.v).trim() !== '' && (w[d.h] !== undefined || S.headers.includes(d.h)) && !sameVal(d.old, d.v));
+
+  let html = cardHeader(c) + '<h3>Associer à</h3><div class="choice">' + suggestionLine(w) + '</div>';
+  if (diffs.length) {
+    html += '<h3>Mettre à jour avec la fiche ' + src + '</h3>' +
+      diffs.map((d, i) => {
+        const empty = !cellStr(d.old).trim();
+        return '<label class="choice"><input type="checkbox" data-link="' + i + '"' + (empty || d.on ? ' checked' : '') +
+          ' style="width:auto;flex:none"><div class="grow"><b>' + esc(d.h) + '</b>' +
+          '<small>Feuille : ' + (empty ? '<i>(vide)</i>' : esc(d.old)) + '</small>' +
+          '<small>' + src + ' : ' + esc(d.v) + '</small>' +
+          (d.h === 'Nom' ? '<small>⚠ Renommer sépare ce vin de son historique sous l’ancien nom.</small>' : '') +
+          '</div></label>';
+      }).join('');
+  } else if (c.product) {
+    html += '<p class="meta">Les infos de ta feuille correspondent déjà à la fiche ' + src + '.</p>';
+  }
+  html += '<p class="meta">' + (c.saq ? 'Le code SAQ ' + esc(c.saq) + ' et l' : 'L') + 'e code-barres ' + esc(c.barcode || '') +
+    ' seront enregistrés sur cette ligne : le prochain scan reconnaîtra directement ce vin.</p>' +
+    '<div class="row" style="margin-top:12px"><button class="btn" onclick="startLink()">Autre bouteille</button>' +
+    '<button class="btn primary" id="btnDoLink">Associer</button></div>';
+  c.link.diffs = diffs;
+  openSheet(html);
+  $('#btnDoLink').addEventListener('click', doLink);
+}
+
+async function doLink() {
+  const c = S.current;
+  const w = c.link.w;
+  const fields = {};
+  document.querySelectorAll('#sheet [data-link]').forEach(el => {
+    if (el.checked) { const d = c.link.diffs[Number(el.dataset.link)]; fields[d.h] = cellStr(d.v); }
+  });
+  if (c.saq) fields['Code SAQ'] = c.saq;
+  if (c.barcode) {
+    const pad = x => x.replace(/\D/g, '').padStart(14, '0');
+    const list = cellStr(w['Code-barres']).split(/[\s,;]+/).filter(Boolean).map(pad);
+    if (!list.includes(pad(c.barcode))) list.push(pad(c.barcode));
+    fields['Code-barres'] = list.join(' ');
+  }
+  if (!Object.keys(fields).length) return toast('Rien à enregistrer', true);
+  loadingSheet('Association dans la feuille…');
+  try {
+    await api('update', { row: w.row, name: w['Nom'], vintage: w['Millésime'], fields }, true);
+    toast('Bouteille associée : le prochain scan la reconnaîtra');
+    await loadData(true);
+    if (c.barcode) openLookup(c.barcode);          // la carte du vin, maintenant reconnu
+    else openFromList(w.row);
+  } catch (e) {
+    toast(e.message, true);
+    renderCard();
+  }
 }
 
 /* ---------------------------- Retirer ---------------------------- */
