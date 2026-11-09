@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2a0f1c">
 <title>Cellier</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -25,6 +25,7 @@
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; }
+  html, body { touch-action: pan-x pan-y; }          /* bloque le pincement sur l'app */
   body {
     background: var(--bg); color: var(--text);
     font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -181,6 +182,17 @@
   .wine .thumb { width: 36px; height: 54px; object-fit: contain; background: #fff; border-radius: 6px; flex: none; }
   .photo-box img { display: block; max-width: 100%; max-height: 280px; margin: 4px 0 8px; border-radius: 12px; background: #fff; }
   .noscan { margin-top: 10px; }
+  .wine-head img, #photoPrev { cursor: zoom-in; }
+  .viewer { position: fixed; inset: 0; z-index: 50; background: #000; display: none; touch-action: none; overflow: hidden; }
+  .viewer.open { display: block; }
+  .viewer img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; user-select: none; -webkit-user-drag: none; }
+  .viewer .close {
+    position: absolute; top: calc(env(safe-area-inset-top) + 12px); right: 12px; z-index: 2;
+    width: 44px; height: 44px; border-radius: 50%; border: 0; font-size: 20px;
+    background: rgba(255,255,255,.18); color: #fff;
+  }
+  .viewer .hint2 { position: absolute; bottom: calc(env(safe-area-inset-bottom) + 14px); left: 0; right: 0;
+    text-align: center; color: rgba(255,255,255,.6); font-size: 12px; pointer-events: none; }
   .wine .grow { flex: 1; min-width: 0; }
   .wine .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wine .qty {
@@ -317,6 +329,7 @@
 
 <div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
+<div class="viewer" id="viewer"><img id="viewerImg" alt="" referrerpolicy="no-referrer" draggable="false"><button class="close" id="viewerClose" aria-label="Fermer">✕</button><div class="hint2">Pince pour zoomer · touche deux fois</div></div>
 
 <script>
 /* =====================================================================
@@ -324,7 +337,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -425,6 +438,7 @@ function setTab(tab) {
 
 window.addEventListener('popstate', e => {
   if (ignorePop) { ignorePop = false; return; }
+  if (isViewerOpen()) { hideViewer(); return; }
   if (isSheetOpen()) { hideSheet(); return; }
   applyTab((e.state && e.state.tab) || 'scan');
 });
@@ -663,6 +677,126 @@ function hideSheet() {
   if (S.tab === 'scan') setTimeout(startScan, 150);
 }
 function isSheetOpen() { return $('#overlay').classList.contains('open'); }
+
+/* ---------------------------- Visionneuse de photo (zoom) ---------------------------- */
+const V = { s: 1, x: 0, y: 0, fitW: 0, fitH: 0, pts: new Map(), start: null, lastTap: 0 };
+
+function isViewerOpen() { return $('#viewer').classList.contains('open'); }
+
+/** Version plus grande d'une photo Google Drive (les miniatures sont en 800 px). */
+const bigUrl = u => String(u).replace(/([?&]sz=)w\d+/, '$1w2000');
+
+function openViewer(src) {
+  if (!src) return;
+  const img = $('#viewerImg');
+  img.onload = () => fitViewer();
+  img.src = /^data:/.test(src) ? src : bigUrl(src);
+  $('#viewer').classList.add('open');
+  history.pushState({ tab: S.tab, sheet: isSheetOpen(), viewer: true }, '');
+  if (img.complete && img.naturalWidth) fitViewer();
+}
+
+function closeViewer() {
+  if (!isViewerOpen()) return;
+  if (history.state && history.state.viewer) { ignorePop = true; history.back(); }
+  hideViewer();
+}
+
+function hideViewer() {
+  $('#viewer').classList.remove('open');
+  V.pts.clear();
+}
+
+function fitViewer() {
+  const img = $('#viewerImg');
+  const W = innerWidth, H = innerHeight;
+  const k = Math.min(W / img.naturalWidth, H / img.naturalHeight);
+  V.fitW = img.naturalWidth * k; V.fitH = img.naturalHeight * k;
+  img.style.width = V.fitW + 'px'; img.style.height = V.fitH + 'px';
+  V.s = 1; V.x = (W - V.fitW) / 2; V.y = (H - V.fitH) / 2;
+  applyViewer();
+}
+
+function applyViewer() {
+  $('#viewerImg').style.transform = 'translate(' + V.x + 'px,' + V.y + 'px) scale(' + V.s + ')';
+}
+
+/** Zoom de facteur s autour du point (px, py) de l'écran. */
+function zoomAt(px, py, s) {
+  s = Math.max(1, Math.min(6, s));
+  V.x = px - (px - V.x) * (s / V.s);
+  V.y = py - (py - V.y) * (s / V.s);
+  V.s = s;
+}
+
+/** Empêcher l'image de sortir de l'écran ; à 1× elle se recentre. */
+function clampViewer() {
+  if (V.s <= 1.02) { fitViewer(); return; }
+  const W = innerWidth, H = innerHeight, w = V.fitW * V.s, h = V.fitH * V.s;
+  V.x = w <= W ? (W - w) / 2 : Math.min(0, Math.max(W - w, V.x));
+  V.y = h <= H ? (H - h) / 2 : Math.min(0, Math.max(H - h, V.y));
+  applyViewer();
+}
+
+(function initViewer() {
+  const el = $('#viewer');
+  const snapshot = () => {
+    const p = [...V.pts.values()];
+    V.start = { s: V.s, x: V.x, y: V.y, p };
+    if (p.length >= 2) {
+      V.start.d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      V.start.mx = (p[0].x + p[1].x) / 2; V.start.my = (p[0].y + p[1].y) / 2;
+    }
+  };
+  el.addEventListener('pointerdown', e => {
+    if (e.target.id === 'viewerClose') return;
+    el.setPointerCapture(e.pointerId);
+    V.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    snapshot();
+  });
+  el.addEventListener('pointermove', e => {
+    if (!V.pts.has(e.pointerId) || !V.start) return;
+    V.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const p = [...V.pts.values()], st = V.start;
+    if (p.length >= 2 && st.d) {                       // pincement : zoom + déplacement du milieu
+      const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      const mx = (p[0].x + p[1].x) / 2, my = (p[0].y + p[1].y) / 2;
+      const s = Math.max(1, Math.min(6, st.s * d / st.d));
+      V.s = s;
+      V.x = mx - (st.mx - st.x) * (s / st.s);
+      V.y = my - (st.my - st.y) * (s / st.s);
+      applyViewer();
+    } else if (p.length === 1 && V.s > 1 && st.p.length === 1) {   // glisser quand c'est zoomé
+      V.x = st.x + (p[0].x - st.p[0].x);
+      V.y = st.y + (p[0].y - st.p[0].y);
+      applyViewer();
+    }
+  });
+  const end = e => {
+    if (!V.pts.has(e.pointerId)) return;
+    const st = V.start, wasSingle = st && st.p.length === 1 && V.pts.size === 1;
+    const moved = st && st.p[0] ? Math.hypot(e.clientX - st.p[0].x, e.clientY - st.p[0].y) : 0;
+    V.pts.delete(e.pointerId);
+    if (wasSingle && moved < 10) {                     // une touche (pas un glissement)
+      const now = Date.now();
+      if (now - V.lastTap < 300) {                     // double touche : 2,5× ou retour
+        if (V.s > 1.05) fitViewer(); else { zoomAt(e.clientX, e.clientY, 2.5); clampViewer(); }
+        V.lastTap = 0;
+      } else V.lastTap = now;
+    }
+    if (V.pts.size) snapshot(); else { V.start = null; clampViewer(); }
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, V.s * (e.deltaY < 0 ? 1.15 : 1 / 1.15)); clampViewer(); }, { passive: false });
+  $('#viewerClose').addEventListener('click', closeViewer);
+  addEventListener('resize', () => { if (isViewerOpen()) fitViewer(); });
+  // Toucher une photo dans une carte ou un formulaire → visionneuse
+  $('#sheet').addEventListener('click', e => {
+    const img = e.target.closest('.wine-head img, #photoPrev');
+    if (img && img.getAttribute('src')) openViewer(img.getAttribute('src'));
+  });
+})();
 $('#overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closeSheet(); });
 
 function loadingSheet(msg) {
