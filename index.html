@@ -178,6 +178,9 @@
     color: var(--text); font: inherit;
   }
   .wine .dot { width: 10px; align-self: stretch; border-radius: 6px; flex: none; }
+  .wine .thumb { width: 36px; height: 54px; object-fit: contain; background: #fff; border-radius: 6px; flex: none; }
+  .photo-box img { display: block; max-width: 100%; max-height: 280px; margin: 4px 0 8px; border-radius: 12px; background: #fff; }
+  .noscan { margin-top: 10px; }
   .wine .grow { flex: 1; min-width: 0; }
   .wine .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wine .qty {
@@ -250,6 +253,7 @@
       <input id="manualCode" autocapitalize="off" placeholder="Code-barres, code SAQ ou L + SKU LCBO">
       <button class="btn" type="submit">OK</button>
     </form>
+    <button class="btn block noscan" id="btnNoCode">＋ Bouteille sans code-barres (photo)</button>
   </section>
 
   <!-- ================= Cellier ================= -->
@@ -320,7 +324,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.1';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -607,6 +611,7 @@ async function switchCamera() {
 }
 
 $('#btnStartScan').addEventListener('click', startScan);
+$('#btnNoCode').addEventListener('click', addWithoutCode);
 $('#btnCam').addEventListener('click', switchCamera);
 $('#btnZoom').addEventListener('click', async () => {
   const i = ZOOM_STEPS.findIndex(z => z >= scan.zoom - 0.01);
@@ -758,7 +763,7 @@ function cardHeader(c) {
   if (p && p.grape) chips.push(p.grape);
   else if (m['Cépage']) chips.push(m['Cépage']);
   return '<div class="wine-head">' +
-    (p && p.image ? '<img src="' + esc(p.image) + '" alt="">' : '') +
+    ((p && p.image) || m['Photo'] ? '<img src="' + esc((p && p.image) || m['Photo']) + '" alt="" referrerpolicy="no-referrer">' : '') +
     '<div><h2>' + esc(name) + '</h2><div class="meta">' + esc(bits.join(' · ')) + '</div>' +
     '<div class="chips">' + chips.map(x => '<span class="chip">' + esc(x) + '</span>').join('') + '</div></div></div>';
 }
@@ -859,7 +864,7 @@ function dismissSuggestions() {
 const LINK_FIELDS = [
   ['Nom', 'name', false], ['Producteur', 'producer', true], ['Pays', 'country', true],
   ['Région / Appellation', 'region', true], ['Appellation', 'appellation', true], ['Type', 'type', true],
-  ['Cépage', 'grape', true], ['Pastille', 'pastille', true], ['Garde', 'gardeYears', false], ['Prix', 'price', false]
+  ['Cépage', 'grape', true], ['Pastille', 'pastille', true], ['Garde', 'gardeYears', false], ['Prix', 'price', false], ['Photo', 'image', false]
 ];
 
 function linkSuggestion(i) {
@@ -1021,6 +1026,7 @@ const cellStr = v => (v === null || v === undefined) ? '' : String(v);
 /** Formulaire : un champ par colonne, avec suggestions tirées des valeurs déjà dans la feuille. */
 function formHtml(fields, headers) {
   return headers.map((h, i) => {
+    if (h === 'Photo') return photoWidget(cellStr(fields[h]));
     const isNum = NUM_FIELDS.indexOf(h) >= 0;
     let list = '';
     if (!isNum && h !== 'Nom' && h !== 'Code SAQ' && h !== 'Code-barres') {
@@ -1074,6 +1080,7 @@ function startEdit(row) {
   if (!w) return toast('Ligne introuvable : actualise le cellier (⟳)', true);
   S.current.edit = { row: w.row, name: w['Nom'], vintage: w['Millésime'], original: w };
   S.current.aiMarks = {};
+  S.current.photoData = null;
   const hs = editableHeaders(true);
   openSheet('<h2>Modifier</h2><div class="meta">' + esc(w['Nom']) + ' ' + esc(w['Millésime'] || '') +
     ' · ligne ' + w.row + ' de ta feuille</div>' +
@@ -1090,11 +1097,13 @@ async function saveEdit() {
   const form = readForm();
   const changed = {};
   Object.keys(form).forEach(h => { if (form[h] !== cellStr(e.original[h]).trim()) changed[h] = form[h]; });
-  if (!Object.keys(changed).length) { toast('Aucun changement'); return renderCard(); }
+  if (!Object.keys(changed).length && !S.current.photoData) { toast('Aucun changement'); return renderCard(); }
   if (changed['Nom'] === '') return toast('Le nom du vin est obligatoire', true);
   loadingSheet('Enregistrement dans la feuille…');
   try {
-    await api('update', { row: e.row, name: e.name, vintage: e.vintage, fields: changed }, true);
+    const up = { row: e.row, name: e.name, vintage: e.vintage, fields: changed };
+    if (S.current.photoData) { up.photoData = S.current.photoData; loadingSheet('Envoi de la photo…'); }
+    await api('update', up, true);
     toast('Modifications enregistrées');
     closeSheet();
     loadData(true);
@@ -1102,6 +1111,55 @@ async function saveEdit() {
     toast(err.message, true);
     renderCard();
   }
+}
+
+/* ---------------------------- Photos ---------------------------- */
+function photoWidget(url) {
+  return '<label class="field">Photo</label><div class="photo-box">' +
+    '<img id="photoPrev" alt="" referrerpolicy="no-referrer"' + (url ? ' src="' + esc(url) + '"' : ' hidden') + '>' +
+    '<div class="row"><label class="btn" for="photoInput">📷 ' + (url ? 'Changer la photo' : 'Prendre une photo') + '</label>' +
+    '<button class="btn" type="button" onclick="clearPhoto()">Retirer</button></div>' +
+    '<input type="file" id="photoInput" accept="image/*" capture="environment" hidden onchange="onPhoto(this)">' +
+    '<input type="hidden" data-h="Photo" value="' + esc(url) + '"></div>';
+}
+
+/** Photo prise → JPEG réduit (900 px max) pour un envoi rapide. */
+function onPhoto(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    const k = Math.min(1, 900 / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * k);
+    cv.height = Math.round(img.height * k);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    S.current.photoData = cv.toDataURL('image/jpeg', 0.78);
+    URL.revokeObjectURL(img.src);
+    restorePhoto();
+    toast('Photo prête : elle sera enregistrée avec le vin');
+  };
+  img.onerror = () => toast('Photo illisible', true);
+  img.src = URL.createObjectURL(file);
+}
+
+function restorePhoto() {
+  const prev = $('#photoPrev');
+  if (prev && S.current && S.current.photoData) { prev.src = S.current.photoData; prev.hidden = false; }
+}
+
+function clearPhoto() {
+  S.current.photoData = null;
+  const prev = $('#photoPrev'), h = document.querySelector('#sheet [data-h="Photo"]');
+  if (prev) { prev.hidden = true; prev.removeAttribute('src'); }
+  if (h) h.value = '';
+}
+
+/** Importation sans code-barres : formulaire de nouveau vin, avec photo. */
+function addWithoutCode() {
+  stopScan();
+  S.current = { barcode: '', saq: '', product: null, matches: [], suggestions: [] };
+  startAdd();
 }
 
 /* ---------------------------- IA (Gemini, via le script) ---------------------------- */
@@ -1164,6 +1222,7 @@ function startAdd() {
   const c = S.current;
   c.add = { target: c.matches.length ? c.matches[0].row : 'new', qty: 1, fields: null, aiDone: false };
   c.aiMarks = {};
+  c.photoData = null;
   renderAdd();
 }
 
@@ -1186,6 +1245,7 @@ function newWineDefaults(c) {
   put('Garde', p.gardeYears);
   put('Prix', p.price, true);                                   // prix actuel de la fiche
   put('Code SAQ', c.saq || (p.source === 'SAQ' ? p.sku : ''));
+  put('Photo', p.image);
   put("Lieux d'achat", { SAQ: 'SAQ', LCBO: 'LCBO' }[p.source] || (c.saq ? 'SAQ' : 'Hors SAQ'));
   f['Millésime'] = cellStr(p.vintage || '');
   f["Année d'achat"] = String(new Date().getFullYear());
@@ -1233,6 +1293,7 @@ function renderAdd() {
   openSheet(html);
   $('#btnDoAdd').addEventListener('click', doAdd);
   remarkAI();
+  restorePhoto();
   // IA automatique : une fois par formulaire de nouveau vin, s'il reste des champs vides
   if (a.target === 'new' && S.ai && !a.aiDone && AI_FIELDS.some(h => !cellStr(a.fields[h]).trim())) {
     a.aiDone = true;
@@ -1268,6 +1329,7 @@ async function doAdd() {
       else if (a.sibOffset !== null) f['À partir de'] = String(Number(v) + a.sibOffset);
     }
     params.fields = f;
+    if (c.photoData) params.photoData = c.photoData;
     if (!params.barcode && f['Code-barres']) params.barcode = f['Code-barres'];
     if (!params.saq && f['Code SAQ']) params.saq = f['Code SAQ'];
   } else {
@@ -1366,6 +1428,7 @@ function renderList() {
   $('#list').innerHTML = ws.map(w =>
     '<button class="wine' + (qty(w) <= 0 ? ' empty' : '') + '" onclick="openFromList(' + w.row + ')">' +
     '<span class="dot" style="background:' + (TYPE_COLORS[w['Type']] || '#777') + '"></span>' +
+    (w['Photo'] ? '<img class="thumb" loading="lazy" referrerpolicy="no-referrer" src="' + esc(w['Photo']) + '" alt="">' : '') +
     '<span class="grow"><div class="name">' + esc(w['Nom']) + ' <span class="meta">' + esc(w['Millésime']) + '</span></div>' +
     '<div class="meta">' + esc([w['Pays'], w['Région / Appellation'], w['Pastille']].filter(Boolean).join(' · ')) + '</div>' +
     '<div class="status">' + esc(w['Statut'] || '') + (w['Score'] !== '' && w['Score'] != null ? ' · ' + pct(w['Score']) : '') + '</div></span>' +
