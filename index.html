@@ -182,6 +182,13 @@
   .wine .thumb { width: 36px; height: 54px; object-fit: contain; background: #fff; border-radius: 6px; flex: none; }
   .photo-box img { display: block; max-width: 100%; max-height: 280px; margin: 4px 0 8px; border-radius: 12px; background: #fff; }
   .noscan { margin-top: 10px; }
+  .photo-box .row .btn { white-space: nowrap; font-size: 14px; padding: 12px 6px; }
+  .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+  .img-grid button { background: #fff; border: 2px solid transparent; border-radius: 10px; padding: 0; overflow: hidden; cursor: pointer; }
+  .img-grid button:active { border-color: var(--accent); }
+  .img-grid img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: contain; }
+  .img-grid span { display: block; font-size: 10px; color: #333; background: #eee; padding: 2px 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .wine-head img, #photoPrev { cursor: zoom-in; }
   .viewer { position: fixed; inset: 0; z-index: 50; background: #000; display: none; touch-action: none; overflow: hidden; }
   .viewer.open { display: block; }
@@ -337,7 +344,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3.1';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -1251,10 +1258,74 @@ async function saveEdit() {
 function photoWidget(url) {
   return '<label class="field">Photo</label><div class="photo-box">' +
     '<img id="photoPrev" alt="" referrerpolicy="no-referrer"' + (url ? ' src="' + esc(url) + '"' : ' hidden') + '>' +
-    '<div class="row"><label class="btn" for="photoInput">📷 ' + (url ? 'Changer la photo' : 'Prendre une photo') + '</label>' +
+    '<div class="row"><label class="btn" for="photoInput">📷 Photo</label>' +
+    '<button class="btn" type="button" onclick="openImageSearch()">🔎 Chercher</button>' +
     '<button class="btn" type="button" onclick="clearPhoto()">Retirer</button></div>' +
     '<input type="file" id="photoInput" accept="image/*" capture="environment" hidden onchange="onPhoto(this)">' +
-    '<input type="hidden" data-h="Photo" value="' + esc(url) + '"></div>';
+    '<input type="hidden" data-h="Photo" value="' + esc(url) + '">' +
+    '<div id="imgSearch" hidden><div class="row" style="margin-top:8px">' +
+    '<input id="imgQ" type="search" placeholder="Nom du vin à chercher">' +
+    '<button class="btn gold" type="button" style="flex:none" onclick="searchImages()">OK</button></div>' +
+    '<div id="imgResults" class="img-grid"></div></div></div>';
+}
+
+/** Recherche d'images : SAQ, LCBO et Open Food Facts, à partir du nom du formulaire. */
+function openImageSearch() {
+  const box = $('#imgSearch');
+  box.hidden = false;
+  if (!$('#imgQ').value.trim()) {
+    const f = readForm();
+    const name = f['Nom'] || '';
+    const prod = f['Producteur'] && normName(name).indexOf(normName(f['Producteur'])) < 0 ? f['Producteur'] + ' ' : '';
+    $('#imgQ').value = (prod + name).trim();
+  }
+  $('#imgQ').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); searchImages(); } };
+  if ($('#imgQ').value.trim()) searchImages(); else $('#imgQ').focus();
+}
+
+async function searchImages() {
+  const q = $('#imgQ').value.trim();
+  if (!q) return toast('Indique le nom du vin à chercher', true);
+  const res = $('#imgResults');
+  res.innerHTML = '<div class="loading" style="grid-column:1/-1"><div class="spin"></div>Recherche d’images…</div>';
+  try {
+    const r = await api('images', { q });
+    if (!$('#imgResults')) return;                      // formulaire fermé entre-temps
+    const imgs = r.images || [];
+    S.current.imgResults = imgs;
+    res.innerHTML = imgs.length
+      ? imgs.map((im, i) => '<button type="button" onclick="pickImage(' + i + ')" title="' + esc(im.title) + '">' +
+          '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(im.url) + '" alt="" onerror="imgFallback(this)">' +
+          '<span>' + esc(im.source) + (im.title ? ' · ' + esc(im.title) : '') + '</span></button>').join('')
+      : '<p class="meta" style="grid-column:1/-1">Aucune image trouvée. Essaie un nom plus court (producteur + cuvée), ou prends une photo.</p>';
+  } catch (e) {
+    res.innerHTML = '';
+    toast(e.message, true);
+  }
+}
+
+/** Image LCBO en 640 px absente → vignette d'origine (319 px) ; sinon on retire la tuile. */
+function imgFallback(img) {
+  const src = img.getAttribute('src') || '';
+  if (/thumb\.640\.640/.test(src)) {
+    const alt = src.replace('thumb.640.640', 'thumb.319.319');
+    const i = Number((img.parentNode.getAttribute('onclick') || '').replace(/\D/g, ''));
+    if (S.current && S.current.imgResults && S.current.imgResults[i]) S.current.imgResults[i].url = alt;
+    img.src = alt;
+  } else {
+    img.parentNode.remove();
+  }
+}
+
+function pickImage(i) {
+  const im = (S.current.imgResults || [])[i];
+  if (!im) return;
+  S.current.photoData = null;                           // une image choisie remplace une photo prise
+  const prev = $('#photoPrev'), h = document.querySelector('#sheet [data-h="Photo"]');
+  if (prev) { prev.src = im.url; prev.hidden = false; }
+  if (h) h.value = im.url;
+  $('#imgSearch').hidden = true;
+  toast('Image choisie : elle sera enregistrée avec le vin');
 }
 
 /** Photo prise → JPEG réduit (900 px max) pour un envoi rapide. */
