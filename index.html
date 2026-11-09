@@ -344,7 +344,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.5';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -972,7 +972,13 @@ function renderCard() {
   const infoUrl = c.saq
     ? 'https://www.saq.com/fr/' + encodeURIComponent(c.saq)
     : (c.product && c.product.url) ? c.product.url
-    : 'https://www.saq.com/fr/catalogsearch/result/?q=' + encodeURIComponent((c.product && c.product.name) || (c.matches[0] || {})['Nom'] || c.barcode);
+    : 'https://www.google.com/search?q=' + encodeURIComponent(
+        (() => {
+          const w = c.matches[0] || c.ref || {};
+          const name = (c.product && c.product.name) || w['Nom'] || c.barcode;
+          const prod = w['Producteur'] && normName(name).indexOf(normName(w['Producteur'])) < 0 ? w['Producteur'] : '';
+          return [prod, name, 'vin'].filter(Boolean).join(' ');
+        })());
 
   html += '<div class="actions">' +
     '<a class="btn" href="' + esc(infoUrl) + '" target="_blank" rel="noopener"><b>ⓘ</b>Voir l’info</a>' +
@@ -1267,7 +1273,61 @@ function photoWidget(url) {
     '<div id="imgSearch" hidden><div class="row" style="margin-top:8px">' +
     '<input id="imgQ" type="search" placeholder="Nom du vin à chercher">' +
     '<button class="btn gold" type="button" style="flex:none" onclick="searchImages()">OK</button></div>' +
-    '<div id="imgResults" class="img-grid"></div></div></div>';
+    '<div id="imgResults" class="img-grid"></div>' +
+    '<a class="btn block" id="googleImg" style="margin-top:8px" target="_blank" rel="noopener" href="#" ' +
+    'onclick="this.href = googleImagesUrl()">🌐 Chercher sur Google Images</a>' +
+    '<p class="meta" style="margin:8px 2px 4px">Sur Google, appuie longuement sur l’image → <b>Copier l’adresse de l’image</b>, ' +
+    'puis reviens ici :</p>' +
+    '<div class="row"><input id="imgUrl" type="url" inputmode="url" placeholder="Adresse de l’image (https://…)">' +
+    '<button class="btn" type="button" style="flex:none" onclick="pasteImageUrl()">📋 Coller</button></div>' +
+    '<button class="btn gold block" type="button" style="margin-top:8px" onclick="useImageUrl()">Utiliser cette image</button>' +
+    '</div></div>';
+}
+
+/** Google Images avec la recherche en cours (ou le nom du vin). */
+function googleImagesUrl() {
+  const q = ((($('#imgQ') || {}).value || '').trim()) || (readForm()['Nom'] || '');
+  return 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent((q + ' bouteille vin').trim());
+}
+
+/** Adresse copiée sur Google → adresse de l'image elle-même (Google ajoute parfois une page intermédiaire). */
+function cleanImageUrl(u) {
+  u = String(u || '').trim();
+  try {
+    const url = new URL(u);
+    if (/google\./.test(url.hostname) && url.searchParams.get('imgurl')) return url.searchParams.get('imgurl');
+    if (/google\./.test(url.hostname) && url.pathname === '/url' && url.searchParams.get('url')) return url.searchParams.get('url');
+  } catch (e) { /* pas une adresse */ }
+  return u;
+}
+
+async function pasteImageUrl() {
+  try {
+    const t = await navigator.clipboard.readText();
+    if (t) { $('#imgUrl').value = t.trim(); return useImageUrl(); }
+    toast('Le presse-papiers est vide', true);
+  } catch (e) {
+    $('#imgUrl').focus();
+    toast('Colle l’adresse dans le champ (appui long → Coller)');
+  }
+}
+
+function useImageUrl() {
+  const u = cleanImageUrl(($('#imgUrl') || {}).value);
+  if (!/^https?:\/\/\S+$/i.test(u)) return toast('Ce n’est pas une adresse d’image (elle doit commencer par https://)', true);
+  const test = new Image();
+  test.referrerPolicy = 'no-referrer';
+  test.onload = () => {
+    S.current.photoData = null;
+    const prev = $('#photoPrev'), h = document.querySelector('#sheet [data-h="Photo"]');
+    if (prev) { prev.src = u; prev.hidden = false; }
+    if (h) h.value = u;
+    $('#imgUrl').value = '';
+    $('#imgSearch').hidden = true;
+    toast('Image choisie : elle sera enregistrée avec le vin');
+  };
+  test.onerror = () => toast('Cette adresse ne donne pas une image. Sur Google, ouvre l’image puis copie son adresse.', true);
+  test.src = u;
 }
 
 /** Recherche d'images : SAQ, LCBO et Open Food Facts, à partir du nom du formulaire. */
@@ -1298,7 +1358,7 @@ async function searchImages() {
       ? imgs.map((im, i) => '<button type="button" onclick="pickImage(' + i + ')" title="' + esc(im.title) + '">' +
           '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(im.url) + '" alt="" onerror="imgFallback(this)">' +
           '<span>' + esc(im.source) + (im.title ? ' · ' + esc(im.title) : '') + '</span></button>').join('')
-      : '<p class="meta" style="grid-column:1/-1">Aucune image trouvée. Essaie un nom plus court (producteur + cuvée), ou prends une photo.</p>';
+      : '<p class="meta" style="grid-column:1/-1">Rien à la SAQ ni à la LCBO. Utilise Google Images ci-dessous, ou prends une photo.</p>';
   } catch (e) {
     res.innerHTML = '';
     toast(e.message, true);
