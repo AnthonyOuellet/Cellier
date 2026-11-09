@@ -269,7 +269,7 @@
       </div>
     </div>
     <form class="manual" id="manualForm">
-      <input id="manualCode" autocapitalize="off" placeholder="Code-barres, code SAQ ou L + SKU LCBO">
+      <input id="manualCode" autocapitalize="off" placeholder="Code-barres, code SAQ, L + SKU LCBO ou nom">
       <button class="btn" type="submit">OK</button>
     </form>
     <button class="btn block noscan" id="btnNoCode">＋ Bouteille sans code-barres (photo)</button>
@@ -344,7 +344,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.3.1';
+const APP_VERSION = '2.4';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -653,6 +653,7 @@ $('#manualForm').addEventListener('submit', e => {
   // « L78006 » ou « LCBO 78006 » = SKU LCBO ; 8 chiffres = code SAQ ; plus long = code-barres
   const digits = v.replace(/\D/g, '');
   if (/^l(cbo)?\s*#?\s*\d+$/i.test(v)) openLookup('', '', digits);
+  else if (/[a-zà-ÿ]{2,}/i.test(v)) openNameSearch(v);
   else if (digits.length === 8 && !digits.startsWith('0')) openLookup('', digits);
   else openLookup(v);
 });
@@ -943,16 +944,15 @@ function renderCard() {
       '<button class="btn" onclick="dismissSuggestions()">Nouveau vin</button></div>';
   } else if (!c.product && c.barcode) {
     html += '<p class="meta">Code lu : <b>' + esc(c.barcode) + '</b> — introuvable à la SAQ et dans ta feuille. ' +
-      'Si ce n’est pas le code de la bouteille, rescanne. Sinon, tu peux chercher à la LCBO, ' +
-      'puis l’ajouter avec ＋ (entrée manuelle).</p>' +
-      '<div class="row">' +
+      'Si ce n’est pas le code de la bouteille, rescanne. Sinon, cherche le vin par le nom sur l’étiquette : ' +
+      'le code-barres lui sera lié.</p>' +
+      productSearchHtml('') +
+      '<div class="row" style="margin-top:10px">' +
       '<button class="btn" onclick="closeSheet()">⌁ Rescanner</button>' +
-      '<a class="btn" target="_blank" rel="noopener" href="https://www.lcbo.com/en/catalogsearch/result/?q=' +
-      encodeURIComponent(c.barcode.replace(/^0+(?=\d{12,13}$)/, '')) + '">Chercher à la LCBO</a></div>' +
-      '<label class="field" for="lcboSku">SKU LCBO trouvé sur lcbo.com</label>' +
+      '<button class="btn" onclick="startLink()">Déjà dans ma feuille…</button></div>' +
+      '<label class="field" for="lcboSku">Ou SKU LCBO trouvé sur lcbo.com</label>' +
       '<div class="row"><input id="lcboSku" inputmode="numeric" placeholder="ex. 78006">' +
-      '<button class="btn gold" onclick="loadLcboSku()">Charger la fiche</button></div>' +
-      '<button class="btn block" style="margin-top:8px" onclick="startLink()">Associer à une bouteille de ma feuille…</button>';
+      '<button class="btn gold" style="flex:none" onclick="loadLcboSku()">Charger</button></div>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
     if (c.barcode || c.saq) {
@@ -981,6 +981,7 @@ function renderCard() {
     '</div>';
   html += '<button class="btn block" style="margin-top:10px" onclick="closeSheet()">Fermer</button>';
   openSheet(html);
+  bindProductSearch();
 }
 
 /** Ligne d'une suggestion : le nom du vin d'abord, pour savoir de quelle bouteille il s'agit. */
@@ -1552,6 +1553,60 @@ async function doAdd() {
     toast(e.message, true);
     renderAdd();
   }
+}
+
+/* ---------------------------- Recherche de vins par nom (SAQ + LCBO) ---------------------------- */
+function productSearchHtml(q) {
+  return '<label class="field" for="prodQ">Chercher par nom (SAQ + LCBO)</label>' +
+    '<div class="row"><input id="prodQ" type="search" placeholder="Producteur, cuvée…" value="' + esc(q) + '">' +
+    '<button class="btn gold" style="flex:none" onclick="searchProducts()">OK</button></div>' +
+    '<div id="prodResults" style="margin-top:8px"></div>';
+}
+
+/** Depuis le champ manuel du scanner : un nom tapé au lieu d'un code. */
+function openNameSearch(q) {
+  S.current = { barcode: '', saq: '', product: null, matches: [], suggestions: [] };
+  openSheet('<h2>Chercher un vin</h2>' + productSearchHtml(q) +
+    '<button class="btn block" style="margin-top:10px" onclick="closeSheet()">Fermer</button>');
+  bindProductSearch();
+  searchProducts();
+}
+
+function bindProductSearch() {
+  const el = $('#prodQ');
+  if (el) el.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); searchProducts(); } };
+}
+
+async function searchProducts() {
+  const q = (($('#prodQ') || {}).value || '').trim();
+  if (!q) return toast('Tape le nom du vin', true);
+  const box = $('#prodResults');
+  box.innerHTML = '<div class="loading"><div class="spin"></div>Recherche à la SAQ et à la LCBO…</div>';
+  try {
+    const r = await api('products', { q });
+    if (!$('#prodResults')) return;
+    const list = r.products || [];
+    S.current.prodResults = list;
+    box.innerHTML = list.length
+      ? list.map((p, i) => '<button class="choice" onclick="pickProduct(' + i + ')">' +
+          (p.image ? '<img class="thumb" style="width:36px;height:54px;object-fit:contain;background:#fff;border-radius:6px;flex:none" ' +
+            'loading="lazy" referrerpolicy="no-referrer" src="' + esc(p.image) + '" alt="" onerror="this.remove()">' : '') +
+          '<div class="grow"><b>' + esc(p.name) + '</b><small>' + esc(p.source) + ' · ' + esc(p.sku) +
+          (p.price ? ' · ' + money(Number(p.price)) : '') + '</small></div></button>').join('')
+      : '<p class="meta">Aucun vin trouvé. Essaie moins de mots (producteur + cuvée).</p>';
+  } catch (e) {
+    box.innerHTML = '';
+    toast(e.message, true);
+  }
+}
+
+/** Vin choisi → sa fiche, comme après un scan ; le code-barres scanné est conservé. */
+function pickProduct(i) {
+  const p = (S.current.prodResults || [])[i];
+  if (!p) return;
+  const bc = S.current.barcode || '';
+  if (p.source === 'SAQ') openLookup(bc, p.sku);
+  else openLookup(bc, '', p.sku);
 }
 
 /** SKU trouvé sur lcbo.com → fiche LCBO, en gardant le code-barres scanné. */
