@@ -105,6 +105,8 @@
   }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   input[type=checkbox] { accent-color: var(--accent); width: 20px; height: 20px; }
+  input.ai { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2) inset; }
+  .ai-tag { color: var(--accent-2); font-size: 12px; margin-left: 6px; }
   label.field { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 13px; }
   .btn {
     border: 0; border-radius: 12px; padding: 13px 16px; font: inherit; font-weight: 600;
@@ -318,7 +320,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '1.9';
+const APP_VERSION = '2.0';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -330,6 +332,7 @@ const S = {
   token: store.get('token', ''),
   wines: store.get('wines', []),
   headers: store.get('headers', []),
+  ai: store.get('ai', false),
   readonly: store.get('readonly', ['Statut', "Jusqu'à", 'Score', 'Column 20']),
   archive: store.get('archive', []),
   tab: 'scan',
@@ -380,6 +383,7 @@ async function loadData(quiet) {
     S.wines = c.wines || [];
     if (c.headers) { S.headers = c.headers; store.set('headers', S.headers); }
     if (c.readonly) { S.readonly = c.readonly; store.set('readonly', S.readonly); }
+    S.ai = !!c.ai; store.set('ai', S.ai);
     S.archive = a.rows || [];
     store.set('wines', S.wines);
     store.set('archive', S.archive);
@@ -1069,11 +1073,12 @@ function startEdit(row) {
   const w = S.wines.find(x => x.row === row) || (S.current && S.current.matches.find(x => x.row === row));
   if (!w) return toast('Ligne introuvable : actualise le cellier (⟳)', true);
   S.current.edit = { row: w.row, name: w['Nom'], vintage: w['Millésime'], original: w };
+  S.current.aiMarks = {};
   const hs = editableHeaders(true);
   openSheet('<h2>Modifier</h2><div class="meta">' + esc(w['Nom']) + ' ' + esc(w['Millésime'] || '') +
     ' · ligne ' + w.row + ' de ta feuille</div>' +
     siblingButtons(siblingsOf(w['Nom'], w.row)) +
-    '<h3>Colonnes</h3>' + formHtml(w, hs) +
+    '<h3>Colonnes</h3>' + aiButton() + formHtml(w, hs) +
     '<p class="meta" style="margin-top:12px">Statut, Jusqu’à et Score se recalculent avec tes formules.</p>' +
     '<div class="row" style="margin-top:12px"><button class="btn" onclick="renderCard()">Annuler</button>' +
     '<button class="btn primary" id="btnSaveEdit">Enregistrer</button></div>');
@@ -1099,10 +1104,66 @@ async function saveEdit() {
   }
 }
 
+/* ---------------------------- IA (Gemini, via le script) ---------------------------- */
+const AI_FIELDS = ['Producteur', 'Pays', 'Région / Appellation', 'Appellation', 'Type', 'Cépage', 'Pastille', 'Garde'];
+
+function aiButton() {
+  return S.ai ? '<button class="btn block" id="btnAI" style="margin-top:6px" onclick="runAI(false)">✨ Compléter avec l’IA</button>' : '';
+}
+
+function markAI(el) {
+  el.classList.add('ai');
+  const label = el.previousElementSibling;
+  if (label && !label.querySelector('.ai-tag')) label.insertAdjacentHTML('beforeend', '<span class="ai-tag">✨ IA</span>');
+  el.addEventListener('input', () => {
+    el.classList.remove('ai');
+    const t = label && label.querySelector('.ai-tag'); if (t) t.remove();
+    if (S.current && S.current.aiMarks) delete S.current.aiMarks[el.dataset.h];
+  }, { once: true });
+}
+
+/** Après un nouvel affichage du formulaire, remettre la marque ✨ IA sur les valeurs suggérées. */
+function remarkAI() {
+  const marks = (S.current && S.current.aiMarks) || {};
+  Object.keys(marks).forEach(h => {
+    const el = document.querySelector('#sheet [data-h="' + CSS.escape(h) + '"]');
+    if (el && el.value === marks[h]) markAI(el);
+  });
+}
+
+/** Demande à Gemini les champs vides du formulaire ouvert ; ne remplit que ceux encore vides. */
+async function runAI(auto) {
+  const ctx = S.current;
+  if (!ctx) return;
+  const form = readForm();
+  if (!form['Nom']) return auto ? null : toast('Indique d’abord le nom du vin', true);
+  const btn = $('#btnAI');
+  if (btn) { btn.disabled = true; btn.textContent = '✨ L’IA cherche…'; }
+  try {
+    const r = await api('suggest', { fields: form }, true);
+    if (S.current !== ctx || !isSheetOpen()) return;
+    const marks = ctx.aiMarks || (ctx.aiMarks = {});
+    let n = 0;
+    Object.keys(r.suggestions || {}).forEach(h => {
+      const el = document.querySelector('#sheet [data-h="' + CSS.escape(h) + '"]');
+      if (el && !el.value.trim()) { el.value = r.suggestions[h]; marks[h] = el.value; markAI(el); n++; }
+    });
+    if (n) toast(n + ' champ' + (n > 1 ? 's suggérés' : ' suggéré') + ' par l’IA' +
+      (r.confidence ? ' (confiance ' + r.confidence + ')' : '') + ' : vérifie-les');
+    else if (!auto) toast('L’IA n’a rien de sûr à proposer pour ce vin');
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    const b = $('#btnAI');
+    if (b) { b.disabled = false; b.textContent = '✨ Compléter avec l’IA'; }
+  }
+}
+
 /* ---------------------------- Ajouter ---------------------------- */
 function startAdd() {
   const c = S.current;
-  c.add = { target: c.matches.length ? c.matches[0].row : 'new', qty: 1, fields: null };
+  c.add = { target: c.matches.length ? c.matches[0].row : 'new', qty: 1, fields: null, aiDone: false };
+  c.aiMarks = {};
   renderAdd();
 }
 
@@ -1164,13 +1225,19 @@ function renderAdd() {
     if (!a.fields) a.fields = newWineDefaults(c);
     html += '<h3>Fiche du vin</h3>' +
       '<p class="meta">Vérifie surtout le <b>millésime</b> sur la bouteille. Tout reste modifiable plus tard (✎).</p>' +
-      formHtml(a.fields, editableHeaders(false));
+      aiButton() + formHtml(a.fields, editableHeaders(false));
   }
 
   html += '<div class="row" style="margin-top:16px"><button class="btn" onclick="renderCard()">Annuler</button>' +
     '<button class="btn gold" id="btnDoAdd">Ajouter</button></div>';
   openSheet(html);
   $('#btnDoAdd').addEventListener('click', doAdd);
+  remarkAI();
+  // IA automatique : une fois par formulaire de nouveau vin, s'il reste des champs vides
+  if (a.target === 'new' && S.ai && !a.aiDone && AI_FIELDS.some(h => !cellStr(a.fields[h]).trim())) {
+    a.aiDone = true;
+    runAI(true);
+  }
 }
 
 function pickAdd(t) { S.current.add.target = t; renderAdd(); }
