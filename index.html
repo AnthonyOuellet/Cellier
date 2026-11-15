@@ -344,7 +344,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.6';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -1250,7 +1250,11 @@ async function saveEdit() {
   loadingSheet('Enregistrement dans la feuille…');
   try {
     const up = { row: e.row, name: e.name, vintage: e.vintage, fields: changed };
-    if (S.current.photoData) { up.photoData = S.current.photoData; loadingSheet('Envoi de la photo…'); }
+    if (S.current.photoData) {
+      up.photoData = S.current.photoData;
+      up.photoSmall = await shrinkPhoto(S.current.photoData);
+      loadingSheet('Envoi de la photo…');
+    }
     await api('update', up, true);
     toast('Modifications enregistrées');
     closeSheet();
@@ -1313,21 +1317,70 @@ async function pasteImageUrl() {
 }
 
 function useImageUrl() {
-  const u = cleanImageUrl(($('#imgUrl') || {}).value);
-  if (!/^https?:\/\/\S+$/i.test(u)) return toast('Ce n’est pas une adresse d’image (elle doit commencer par https://)', true);
+  const raw = ((($('#imgUrl') || {}).value) || '').trim();
+  if (!raw) return toast('Colle d’abord l’adresse de l’image', true);
+  // Miniature Google intégrée (data:image/…) : convertie en photo, enregistrée dans ton Drive
+  if (/^data:image\//i.test(raw)) return useDataImage(raw);
+  const u = cleanImageUrl(raw);
+  if (!/^https?:\/\/\S+$/i.test(u)) {
+    return toast('Ce n’est pas une adresse d’image. Copié : « ' + raw.slice(0, 40) + (raw.length > 40 ? '…' : '') + ' »', true);
+  }
   const test = new Image();
   test.referrerPolicy = 'no-referrer';
-  test.onload = () => {
-    S.current.photoData = null;
-    const prev = $('#photoPrev'), h = document.querySelector('#sheet [data-h="Photo"]');
-    if (prev) { prev.src = u; prev.hidden = false; }
-    if (h) h.value = u;
-    $('#imgUrl').value = '';
-    $('#imgSearch').hidden = true;
-    toast('Image choisie : elle sera enregistrée avec le vin');
-  };
-  test.onerror = () => toast('Cette adresse ne donne pas une image. Sur Google, ouvre l’image puis copie son adresse.', true);
+  test.onload = () => setChosenImage(u, null);
+  test.onerror = () => toast('Le site de cette image bloque son affichage ailleurs. Essaie une autre image, ou ouvre-la sur Google puis copie son adresse.', true);
   test.src = u;
+}
+
+/** data:image → JPEG réduit (900 px max), envoyé comme une photo prise avec le téléphone. */
+function useDataImage(dataUrl) {
+  const img = new Image();
+  img.onload = () => {
+    const k = Math.min(1, 900 / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.width * k));
+    cv.height = Math.max(1, Math.round(img.height * k));
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const jpeg = cv.toDataURL('image/jpeg', 0.85);
+    setChosenImage(jpeg, jpeg);
+    if (img.width < 200) toast('Image choisie (petite miniature : ouvre l’image sur Google pour une meilleure qualité)');
+  };
+  img.onerror = () => toast('Image illisible', true);
+  img.src = dataUrl;
+}
+
+/** Version réduite d'une photo, assez petite pour tenir dans une cellule de la feuille (< 45 000 caractères). */
+function shrinkPhoto(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const tries = [[480, 0.7], [400, 0.6], [320, 0.55], [260, 0.5], [200, 0.45]];
+      let out = '';
+      for (const [max, q] of tries) {
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(img.width * k));
+        cv.height = Math.max(1, Math.round(img.height * k));
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        out = cv.toDataURL('image/jpeg', q);
+        if (out.length < 45000) break;
+      }
+      resolve(out.length < 45000 ? out : '');
+    };
+    img.onerror = () => resolve('');
+    img.src = dataUrl;
+  });
+}
+
+/** Applique l'image choisie au formulaire. photoData = image à envoyer au Drive (sinon simple lien). */
+function setChosenImage(src, photoData) {
+  S.current.photoData = photoData;
+  const prev = $('#photoPrev'), h = document.querySelector('#sheet [data-h="Photo"]');
+  if (prev) { prev.src = src; prev.hidden = false; }
+  if (h) h.value = photoData ? '' : src;
+  if ($('#imgUrl')) $('#imgUrl').value = '';
+  if ($('#imgSearch')) $('#imgSearch').hidden = true;
+  if (!photoData || !document.querySelector('.toast.show')) toast('Image choisie : elle sera enregistrée avec le vin');
 }
 
 /** Recherche d'images : SAQ, LCBO et Open Food Facts, à partir du nom du formulaire. */
@@ -1380,13 +1433,7 @@ function imgFallback(img) {
 
 function pickImage(i) {
   const im = (S.current.imgResults || [])[i];
-  if (!im) return;
-  S.current.photoData = null;                           // une image choisie remplace une photo prise
-  const prev = $('#photoPrev'), h = document.querySelector('#sheet [data-h="Photo"]');
-  if (prev) { prev.src = im.url; prev.hidden = false; }
-  if (h) h.value = im.url;
-  $('#imgSearch').hidden = true;
-  toast('Image choisie : elle sera enregistrée avec le vin');
+  if (im) setChosenImage(im.url, null);
 }
 
 /** Photo prise → JPEG réduit (900 px max) pour un envoi rapide. */
@@ -1595,7 +1642,7 @@ async function doAdd() {
       else if (a.sibOffset !== null) f['À partir de'] = String(Number(v) + a.sibOffset);
     }
     params.fields = f;
-    if (c.photoData) params.photoData = c.photoData;
+    if (c.photoData) { params.photoData = c.photoData; params.photoSmall = await shrinkPhoto(c.photoData); }
     if (!params.barcode && f['Code-barres']) params.barcode = f['Code-barres'];
     if (!params.saq && f['Code SAQ']) params.saq = f['Code SAQ'];
   } else {
