@@ -344,7 +344,7 @@
    ===================================================================== */
 // Numéro de version affiché dans l'en-tête et les réglages.
 // À changer à chaque mise à jour, en même temps que CACHE dans sw.js.
-const APP_VERSION = '2.6';
+const APP_VERSION = '2.7';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -652,7 +652,8 @@ $('#manualForm').addEventListener('submit', e => {
   stopScan();
   // « L78006 » ou « LCBO 78006 » = SKU LCBO ; 8 chiffres = code SAQ ; plus long = code-barres
   const digits = v.replace(/\D/g, '');
-  if (/^l(cbo)?\s*#?\s*\d+$/i.test(v)) openLookup('', '', digits);
+  if (/lcbo\.com/i.test(v)) openLookup('', '', v);
+  else if (/^l(cbo)?\s*#?\s*\d+$/i.test(v)) openLookup('', '', digits);
   else if (/[a-zà-ÿ]{2,}/i.test(v)) openNameSearch(v);
   else if (digits.length === 8 && !digits.startsWith('0')) openLookup('', digits);
   else openLookup(v);
@@ -815,7 +816,7 @@ function loadingSheet(msg) {
    Recherche d'une bouteille → carte d'action
    ===================================================================== */
 async function openLookup(barcode, saq, lcbo) {
-  loadingSheet(lcbo ? 'Recherche du SKU ' + lcbo + ' à la LCBO…' : 'Recherche de la bouteille…');
+  loadingSheet(lcbo ? 'Recherche à la LCBO…' : 'Recherche de la bouteille…');
   try {
     const params = {};
     if (barcode) params.barcode = barcode;
@@ -895,7 +896,7 @@ function cardHeader(c) {
     : [m['Type'], m['Pays'], m['Région / Appellation']].filter(Boolean);
   const chips = [];
   if (p && p.source && p.source !== 'SAQ') {
-    chips.push({ LCBO: 'Trouvé à la LCBO', OFF: 'Open Food Facts (infos limitées)' }[p.source] || p.source);
+    chips.push(p.partial ? 'LCBO · fiche partielle (nom tiré du lien)' : ({ LCBO: 'Trouvé à la LCBO' }[p.source] || p.source));
   }
   const pastille = (p && p.pastille) || m['Pastille'];
   if (pastille) chips.push(pastille);
@@ -950,8 +951,8 @@ function renderCard() {
       '<div class="row" style="margin-top:10px">' +
       '<button class="btn" onclick="closeSheet()">⌁ Rescanner</button>' +
       '<button class="btn" onclick="startLink()">Déjà dans ma feuille…</button></div>' +
-      '<label class="field" for="lcboSku">Ou SKU LCBO trouvé sur lcbo.com</label>' +
-      '<div class="row"><input id="lcboSku" inputmode="numeric" placeholder="ex. 78006">' +
+      '<label class="field" for="lcboSku">Ou SKU / lien de la page lcbo.com</label>' +
+      '<div class="row"><input id="lcboSku" autocapitalize="off" placeholder="ex. 78006 ou lien lcbo.com">' +
       '<button class="btn gold" style="flex:none" onclick="loadLcboSku()">Charger</button></div>';
   } else {
     html += '<p class="meta">Pas encore dans le cellier.</p>';
@@ -1056,7 +1057,7 @@ function linkPick(row, fallback) {
   if (!w) return toast('Ligne introuvable : actualise le cellier (⟳)', true);
   c.link = { w };
   const p = c.product || {};
-  const src = { SAQ: 'SAQ', LCBO: 'LCBO', OFF: 'Open Food Facts' }[p.source] || 'SAQ';
+  const src = { SAQ: 'SAQ', LCBO: 'LCBO' }[p.source] || 'SAQ';
   const diffs = LINK_FIELDS
     .map(([h, key, onIfFilled]) => ({ h, v: p[key], old: w[h], on: onIfFilled }))
     .filter(d => d.v !== null && d.v !== undefined && cellStr(d.v).trim() !== '' && (w[d.h] !== undefined || S.headers.includes(d.h)) && !sameVal(d.old, d.v));
@@ -1383,7 +1384,7 @@ function setChosenImage(src, photoData) {
   if (!photoData || !document.querySelector('.toast.show')) toast('Image choisie : elle sera enregistrée avec le vin');
 }
 
-/** Recherche d'images : SAQ, LCBO et Open Food Facts, à partir du nom du formulaire. */
+/** Recherche d'images : SAQ et LCBO, à partir du nom du formulaire. */
 function openImageSearch() {
   const box = $('#imgSearch');
   box.hidden = false;
@@ -1584,7 +1585,7 @@ function renderAdd() {
       '<button class="choice' + (a.target === m.row ? ' selected' : '') + '" onclick="pickAdd(' + m.row + ')">' +
       matchLine(m) + '</button>').join('');
   }
-  const srcLabel = p ? ({ LCBO: 'la fiche LCBO', OFF: 'Open Food Facts' }[p.source] || 'la fiche SAQ') : '';
+  const srcLabel = p ? ({ LCBO: 'la fiche LCBO' }[p.source] || 'la fiche SAQ') : '';
   html += '<button class="choice' + (a.target === 'new' ? ' selected' : '') + '" onclick="pickAdd(\'new\')">' +
     '<div class="grow"><b>' + (vintages.length ? 'Un autre millésime' : 'Nouveau vin') + '</b>' +
     '<small>' + (vintages.length ? 'Pré-rempli avec ton autre millésime' + (p ? ' et ' + srcLabel : '')
@@ -1718,9 +1719,10 @@ function pickProduct(i) {
 
 /** SKU trouvé sur lcbo.com → fiche LCBO, en gardant le code-barres scanné. */
 function loadLcboSku() {
-  const sku = (($('#lcboSku') || {}).value || '').replace(/\D/g, '');
-  if (!sku) return toast('Entre le SKU (les chiffres du # sur lcbo.com)', true);
-  openLookup((S.current && S.current.barcode) || '', '', sku);
+  const v = (($('#lcboSku') || {}).value || '').trim();
+  const ref = /lcbo\.com/i.test(v) ? v : v.replace(/\D/g, '');
+  if (!ref) return toast('Entre le SKU (les chiffres à la fin du lien lcbo.com) ou colle le lien', true);
+  openLookup((S.current && S.current.barcode) || '', '', ref);
 }
 
 /* =====================================================================
